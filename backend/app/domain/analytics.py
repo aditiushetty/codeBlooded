@@ -66,7 +66,8 @@ def summarize(
     """posts: live posts {asset_id, code, channel, language, segment, variant, headline}.
     events: {asset_id, type, qty, at (local datetime), source}."""
     labels = labels or {}
-    by_asset: dict[str, dict[str, float]] = defaultdict(lambda: {"scan": 0, "click": 0, "redeem": 0, "sales": 0, "bills": 0})
+    by_asset: dict[str, dict[str, float]] = defaultdict(
+        lambda: {"scan": 0, "click": 0, "redeem": 0, "return": 0, "sales": 0, "bills": 0})
     days = max(1, min((today - since).days + 1, 30))
     start = today - timedelta(days=days - 1)
     daily = {start + timedelta(days=i): {"scans": 0, "claims": 0, "redeems": 0} for i in range(days)}
@@ -77,12 +78,16 @@ def summarize(
         t, q = e["type"], int(e["qty"])
         if t not in name:
             continue
+        if t == "redeem" and e.get("is_return"):  # a come-back code: a second visit, not a new customer
+            t = "return"
         if e.get("asset_id"):
             by_asset[str(e["asset_id"])][t] += q
-            if t == "redeem" and e.get("bill") is not None:  # what the customer paid, typed at the counter
+            if t in ("redeem", "return") and e.get("bill") is not None:  # what the customer paid, typed at the counter
                 by_asset[str(e["asset_id"])]["sales"] += float(e["bill"])
                 by_asset[str(e["asset_id"])]["bills"] += 1
         at: datetime = e["at"]
+        if t == "return":
+            continue
         if at.date() in daily:
             daily[at.date()][name[t]] += q
         if t in ("scan", "redeem"):
@@ -93,15 +98,16 @@ def summarize(
     for p in posts:
         o = by_asset[str(p["asset_id"])]
         rows.append({**p, "scans": int(o["scan"]), "claims": int(o["click"]), "redeems": int(o["redeem"]),
-                     "sales": round(o["sales"], 2), "bills": int(o["bills"]), "conversion": _rate(int(o["redeem"]), int(o["scan"]))})
+                     "returns": int(o["return"]), "sales": round(o["sales"], 2), "bills": int(o["bills"]), "conversion": _rate(int(o["redeem"]), int(o["scan"]))})
     rows.sort(key=lambda r: (-r["redeems"], -(r["conversion"] or 0), -r["scans"]))
     scans = sum(r["scans"] for r in rows)
     claims = sum(r["claims"] for r in rows)
     redeems = sum(r["redeems"] for r in rows)
+    returns = sum(r["returns"] for r in rows)
     sales, bills = round(sum(r["sales"] for r in rows), 2), sum(r["bills"] for r in rows)
     out: dict[str, Any] = {
         "totals": {"posts": len(rows), "scans": scans, "claims": claims, "redeems": redeems,
-                   "sales": sales, "bills": bills, "average_bill": round(sales / bills) if bills else None,
+                   "returns": returns, "return_rate": _rate(returns, redeems), "sales": sales, "bills": bills, "average_bill": round(sales / bills) if bills else None,
                    "claim_rate": _rate(claims, scans), "redeem_rate": _rate(redeems, claims),
                    "conversion": _rate(redeems, scans)},
         "daily": [{"date": d.isoformat(), **v} for d, v in daily.items()],

@@ -1,12 +1,13 @@
-"""Agent runtime: policy gate + tool-calling loop + hand-offs + owner decisions.
+r"""Agent runtime: policy gate + tool-calling loop + hand-offs + owner decisions.
 
   trigger -> snapshot (detectors) -> Orchestrator picks tools -> policy gate -> execute -> ledger -> repeat
-                                        \-- ask_writer / ask_checker -> the specialist runs the same loop on its
-                                            own model with its own tools, then reports back
+                                        \-- ask_brief / ask_offer / ... / ask_analyst -> the specialist runs the same loop
+                                            on its own model with its own tools, then reports back
 A loop ends when its model stops calling tools or a budget is reached. Every agent goes through the same gate.
 """
 
 import asyncio
+import dataclasses
 import json
 import logging
 from typing import Any
@@ -162,12 +163,47 @@ async def _run(ctx: ToolContext, trigger: str) -> dict[str, Any]:
         _running.discard(key)
 
 
-async def delegate(ctx: ToolContext, agent: AgentSpec, task: dict[str, Any]) -> dict[str, Any]:
+async def run_specialist(ctx: ToolContext, agent: AgentSpec, task: str) -> dict[str, Any]:
+    """The owner calls one specialist directly (the Analyst from the results, the Customer listener from the
+    Customers page), without an Orchestrator turn in front of it. Same gate, budget and ledger."""
+    key = str(ctx.campaign_id or ctx.business["id"])
+    if key in _running:
+        return {"status": "busy", "message": "Already working on this."}
+    _running.add(key)
+    try:
+        async with connection() as conn:
+            await ledger.record(conn, ctx.business["id"], "agent.started", f"Started: {task}", actor="agent",
+                                campaign_id=ctx.campaign_id, payload={"agent": agent.key})
+        out = await asyncio.wait_for(delegate(ctx, agent, {"task": task}, handoff=False),
+                                     timeout=ctx.settings.agent_run_timeout_s)
+        async with connection() as conn:
+            await ledger.record(conn, ctx.business["id"], "agent.finished", out["summary"], actor="agent",
+                                campaign_id=ctx.campaign_id, payload={"agent": agent.key, "llm_calls": out["llm_calls"]})
+        return {"status": "done", "message": out["summary"]}
+    except (NoProviderAvailable, TimeoutError) as e:
+        async with connection() as conn:
+            await ledger.record(conn, ctx.business["id"], "agent.failed",
+                                f"The {agent.name} stopped: the AI models were too slow or busy. Try again soon.",
+                                actor="system", campaign_id=ctx.campaign_id, payload={"error": repr(e)[:300]})
+        return {"status": "unavailable", "message": str(e)}
+    except Exception as e:
+        log.exception("specialist run failed")
+        async with connection() as conn:
+            await ledger.record(conn, ctx.business["id"], "agent.failed",
+                                "I stopped because of an internal error. Your data is safe; try again.",
+                                actor="system", campaign_id=ctx.campaign_id, payload={"error": repr(e)[:500]})
+        return {"status": "failed", "message": str(e)}
+    finally:
+        _running.discard(key)
+
+
+async def delegate(ctx: ToolContext, agent: AgentSpec, task: dict[str, Any], *, handoff: bool = True) -> dict[str, Any]:
     """A hand-off: the specialist works on the task with its own model and tools, then reports back."""
     async with connection() as conn:
         snap = await situation.snapshot(conn, ctx.business, ctx.campaign_id)
-        await ledger.record(conn, ctx.business["id"], "agent.handoff", f"Asked the {agent.name}: {task['task']}",
-                            actor="agent", campaign_id=ctx.campaign_id, payload={"agent": agent.key, "task": task})
+        if handoff:
+            await ledger.record(conn, ctx.business["id"], "agent.handoff", f"Asked the {agent.name}: {task['task']}",
+                                actor="agent", campaign_id=ctx.campaign_id, payload={"agent": agent.key, "task": task})
     steps: list[dict[str, Any]] = []
     final, llm_calls = await _loop(ctx, agent, {"task": task, "situation": snap},
                                    max_calls=ctx.settings.agent_specialist_max_llm_calls, steps=steps)
@@ -190,6 +226,7 @@ async def _loop(ctx: ToolContext, agent: AgentSpec, opening: dict[str, Any], *, 
             locality=ctx.business["locality"], city=ctx.business["city"], max_llm_calls=max_calls)},
         {"role": "user", "content": json.dumps(opening, ensure_ascii=False, default=str)},
     ]
+    ctx = dataclasses.replace(ctx, agent=agent.key)
     llm_calls = 0
     nudged = False
     mine = 0  # this agent's own steps (hand-offs report the specialist's steps separately)
@@ -249,6 +286,8 @@ async def decide_inbox(ctx: ToolContext, item_id: str, *, approve: bool, note: s
     if item["status"] != "pending":
         raise services.Conflict(f"Already {item['status']}.")
 
+    if item["kind"] == "question" and approve and not (note or "").strip():
+        raise services.Conflict("Type or pick an answer first.")
     result: dict[str, Any] | None = None
     tool_name = item["payload"].get("tool")
     if approve and tool_name:

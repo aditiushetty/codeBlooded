@@ -6,6 +6,7 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import type { Asset, ChannelsStatus, ResultRow } from "@/lib/types";
 import { postToInstagram } from "./asset-card";
+import { MoreWays } from "./reach-tools";
 import { CHANNEL_LABEL, LANG_LABEL, segmentLabel, stagger } from "./ui";
 
 const CHANNEL_ICON = { instagram_post: InstagramLogo, instagram_story: DeviceMobile, poster: Storefront, whatsapp: WhatsappLogo } as const;
@@ -129,13 +130,14 @@ function PostOnInstagram({ asset, channels }: { asset: Asset; channels: Channels
 export function SharePanel({ assets, rows, channels }: { assets: Asset[]; rows: ResultRow[]; channels?: ChannelsStatus | null }) {
   return (
     <div>
-      <ol className="mb-6 grid grid-cols-1 gap-px overflow-hidden rounded-[var(--radius-lg)] bg-ink ring-1 ring-ink md:grid-cols-3">
+      <ol className="mb-6 grid grid-cols-1 gap-px overflow-hidden rounded-[var(--radius-lg)] bg-ink ring-1 ring-ink md:grid-cols-2 xl:grid-cols-4">
         {[
           ["Instagram", channels?.instagram
             ? `Post straight to ${channels.instagram.username}. The caption carries the post's code for the counter.`
             : "Download the picture from the post above and paste the caption. The caption carries your link."],
           ["WhatsApp", "Send the message to your customers or your status. Each one has its own link."],
           ["At the counter", "Print the QR code. Each customer gets their own code; staff scan it with a phone or type it on the Counter screen."],
+          ["Google and reels", "Put the offer on your Google listing, turn a post into a reel with a voice-over, or get a WhatsApp template approved for customers who wrote over a day ago."],
         ].map(([t, d], i) => (
           <li key={t} className="rise-in bg-surface p-5" style={stagger(i)}>
             <p className="font-mono text-[12px] font-semibold text-muted">{String(i + 1).padStart(2, "0")}</p>
@@ -210,6 +212,7 @@ export function SharePanel({ assets, rows, channels }: { assets: Asset[]; rows: 
                   <ArrowSquareOut size={15} aria-hidden /> Preview
                 </a>
               </div>
+              <MoreWays asset={a} />
             </li>
           );
         })}

@@ -10,10 +10,12 @@ import { Composer } from "@/components/composer";
 import { ExperimentPanel } from "@/components/experiment-panel";
 import { FactsCard } from "@/components/facts-card";
 import { InboxList } from "@/components/inbox";
+import { EffortLine } from "@/components/effort-cost";
 import { JourneyTrack } from "@/components/journey";
 import { CampaignAnalytics } from "@/components/campaign-analytics";
 import { FestivalCard } from "@/components/festival-card";
 import { SharePanel } from "@/components/share-panel";
+import { TeamFeed } from "@/components/team-feed";
 import { Shell } from "@/components/shell";
 import { Button, CHANNEL_LABEL, Empty, SectionHeading, Skeleton, StatusPill } from "@/components/ui";
 import { api, useResource } from "@/lib/api";
@@ -125,6 +127,12 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
           <span className="hl hl-in">{nextAction(step, data)}</span>
           <ArrowDown size={18} weight="bold" className="transition-transform duration-200 group-hover:translate-y-0.5" aria-hidden />
         </a>
+      )}
+
+      {data.effort && data.effort.taps > 0 && (
+        <div className="mt-4">
+          <EffortLine e={data.effort} />
+        </div>
       )}
 
       <div className="mt-8">
@@ -273,8 +281,15 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
             <h2 className="text-[24px]">Tell Counterpart</h2>
             <p className="mb-3 mt-1 text-[14px] text-muted">Ask for changes in plain words. Offer changes come back to you to lock.</p>
             <Composer rows={3} placeholder="Make it Sunday only, Saturday has a private booking." submitLabel="Send" onSubmit={tell} suggestions={TELL_SUGGESTIONS} />
-            {sent && <p className="mt-3 text-[14px] text-pen">On it: “{sent}”. The banner at the top shows progress.</p>}
+            {sent && <p className="mt-3 text-[14px] text-pen">On it: “{sent}”. Watch the team below.</p>}
           </div>
+          <section aria-labelledby="team-feed-h">
+            <h2 id="team-feed-h" className="text-[24px]">The team at work</h2>
+            <p className="mb-3 mt-1 text-[14px] text-muted">Who handed what to whom, and what the checks stopped.</p>
+            <div className="xl:max-h-[calc(100vh-24rem)] xl:overflow-y-auto xl:pr-2">
+              <TeamFeed slug={business.slug} campaignId={id} />
+            </div>
+          </section>
         </aside>
       </div>
     </Shell>

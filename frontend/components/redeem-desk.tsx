@@ -17,6 +17,8 @@ export interface CounterCheck {
   when: string[];
   post: { channel: string; language: string; headline: string | null } | null;
   bill_amount: number | null;
+  come_back?: boolean; // this is a customer's second-visit code
+  return_code?: { code: string; valid_from: string; valid_until: string } | null; // made when a first code is used
 }
 
 /** The two calls a desk makes. The owner's Counter page sends them signed in; a staff phone sends its PIN session. */
@@ -148,6 +150,13 @@ export function RedeemDesk({ call, initialCode, onRedeemed }: { call: DeskCall; 
 
       <div className="space-y-5 px-5 py-5">
         {check.reason && check.verdict !== "redeemed" && <p className="text-[15px] font-medium">{check.reason}</p>}
+        {check.come_back && check.verdict !== "redeemed" && <p className="text-[14px] font-semibold text-pen">A come-back code: this customer is here for a second visit.</p>}
+        {check.verdict === "redeemed" && check.return_code && (
+          <p className="rounded-[var(--radius-sm)] bg-marker px-3 py-2 text-[15px]">
+            They got a come-back code for one more visit: <span className="font-receipt font-semibold tracking-[0.12em]">{check.return_code.code}</span>, valid until{" "}
+            {new Date(check.return_code.valid_until + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short" })}. It shows on their phone.
+          </p>
+        )}
 
         <div>
           <p className="text-[13px] font-semibold text-muted">{check.verdict === "redeemed" ? "Give them" : "The offer"}</p>

@@ -6,14 +6,16 @@ import hmac
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from app import ledger, services
 from app.api.deps import get_router, require_owner
 from app.auth import CurrentUser, business_for, require_member
-from app.channels import instagram, meta, whatsapp
+from app.channels import google_business, instagram, meta, whatsapp
 from app.config import get_settings
 from app.db import connection, fetch_all, fetch_one, jsonb
+from app.domain import redeem, wa_template
 
 channels_api = APIRouter(prefix="/api", dependencies=[Depends(require_owner)])
 webhook = APIRouter(prefix="/api/public")
@@ -39,7 +41,7 @@ async def channels_status(user: CurrentUser, slug: str) -> dict[str, Any]:
         last_in = await fetch_one(conn, """select max(created_at) as at from channel_messages
                                            where business_id = %s and direction = 'in'""", (b["id"],))
         media = await fetch_one(conn, "select count(*)::int as n from instagram_media where business_id = %s", (b["id"],))
-    wa, ig = rows.get("whatsapp"), rows.get("instagram")
+    wa, ig, gb = rows.get("whatsapp"), rows.get("instagram"), rows.get("google_business")
     return {
         "public_url": base, "public_ok": base.startswith("https://"),
         "webhook": {"url": f"{base}/api/public/whatsapp/webhook", "verify_token_set": s.whatsapp_verify_token is not None,
@@ -48,6 +50,10 @@ async def channels_status(user: CurrentUser, slug: str) -> dict[str, Any]:
                             "template": (wa["meta"] or {}).get("template"), "connected_at": wa["connected_at"],
                             "contacts": contacts},
         "instagram": ig and {"username": ig["display"], "connected_at": ig["connected_at"], "posts_linked": media["n"]},
+        "google": {"configured": google_business.configured(),
+                   "account": gb and {"display": gb["display"], "connected_at": gb["connected_at"],
+                                      "location": (gb["meta"] or {}).get("location"),
+                                      "locations": (gb["meta"] or {}).get("locations") or []}},
     }
 
 
@@ -57,6 +63,8 @@ class WhatsAppConnect(BaseModel):
     template: str | None = Field(None, max_length=120, pattern=r"^[a-z0-9_]+$",
                                  description="Approved marketing template with 3 body variables: business, headline, link.")
     template_language: str = Field("en", max_length=10)
+    waba_id: str | None = Field(None, max_length=40, pattern=r"^\d+$",
+                                description="WhatsApp Business Account id, needed to submit message templates.")
 
 
 @channels_api.put("/businesses/{slug}/channels/whatsapp")
@@ -74,7 +82,7 @@ async def connect_whatsapp(user: CurrentUser, slug: str, body: WhatsAppConnect) 
                values (%s, 'whatsapp', %s, %s, %s, %s)
                on conflict (business_id, channel) do update set external_id = excluded.external_id,
                  display = excluded.display, token = excluded.token, meta = excluded.meta, connected_at = now()""",
-            (b["id"], body.phone_number_id, info["display"], body.token.strip(), jsonb({"template": template, "name": info["name"]})))
+            (b["id"], body.phone_number_id, info["display"], body.token.strip(), jsonb({"template": template, "name": info["name"], "waba_id": body.waba_id})))
         await ledger.record(conn, b["id"], "channel.connected", f"WhatsApp connected: {info['display']}", actor="owner")
     return {"ok": True, **info}
 
@@ -105,7 +113,7 @@ async def connect_instagram(user: CurrentUser, slug: str, body: InstagramConnect
 
 @channels_api.delete("/businesses/{slug}/channels/{channel}")
 async def disconnect(user: CurrentUser, slug: str, channel: str) -> dict[str, Any]:
-    if channel not in ("whatsapp", "instagram"):
+    if channel not in ("whatsapp", "instagram", "google_business"):
         raise services.NotFound("not found")
     async with connection() as conn:
         b = await business_for(conn, user, slug)
@@ -127,6 +135,110 @@ async def send_on_whatsapp(user: CurrentUser, asset_id: str) -> dict[str, Any]:
     """Send a live post to customers who messaged the business (free inside 24 hours, a template otherwise)."""
     b = await _business_of_asset(user, asset_id)
     return await whatsapp.broadcast(b, asset_id)
+
+
+def _template_out(t: dict[str, Any]) -> dict[str, Any]:
+    return {**{k: t[k] for k in ("id", "asset_id", "name", "language", "category", "body", "footer", "example", "status",
+                                  "reason", "submitted_at", "updated_at")},
+            "problems": wa_template.problems(t) if t["status"] in ("draft", "rejected") else []}
+
+
+@channels_api.post("/assets/{asset_id}/whatsapp/template")
+async def draft_whatsapp_template(user: CurrentUser, asset_id: str) -> dict[str, Any]:
+    """A message template drafted from a live post (its checked text and locked offer wording), checked against
+    Meta's rules. Templates are what may be sent to customers outside the free 24-hour window."""
+    b = await _business_of_asset(user, asset_id)
+    async with connection() as conn:
+        asset = await services.get_asset(conn, asset_id)
+        tp = await fetch_one(conn, "select code from touchpoints where asset_id = %s", (asset_id,))
+        if asset["status"] != "live" or not tp:
+            raise services.Conflict("Approve the post first; a template needs the post's tracked link.")
+        rendered = ((await services.current_revision(conn, asset_id)) or {}).get("rendered") or {}
+        t = wa_template.draft(business_slug=b["slug"], post_code=tp["code"], language=asset["language"],
+                              headline=rendered.get("headline", ""), body=rendered.get("body", ""),
+                              offer=rendered.get("offer", []),
+                              link=f"{get_settings().public_base_url.rstrip('/')}/r/{tp['code']}")
+        row = await fetch_one(
+            conn, """insert into wa_templates (business_id, asset_id, name, language, category, body, footer, example)
+                     values (%s, %s, %s, %s, %s, %s, %s, %s)
+                     on conflict (business_id, name, language) do update set body = excluded.body,
+                       footer = excluded.footer, example = excluded.example, updated_at = now()
+                       where wa_templates.status in ('draft', 'rejected')
+                     returning *""",
+            (b["id"], asset_id, t["name"], t["language"], t["category"], t["body"], t["footer"], jsonb(t["example"])))
+        row = row or await fetch_one(conn, "select * from wa_templates where business_id = %s and name = %s and language = %s",
+                                     (b["id"], t["name"], t["language"]))
+        if row and row["status"] == "rejected":  # redrafted: back to a draft the owner can submit again
+            row = await fetch_one(conn, "update wa_templates set status = 'draft' where id = %s returning *", (row["id"],))
+    return _template_out(row)  # type: ignore[arg-type]
+
+
+class TemplateEdit(BaseModel):
+    body: str = Field(min_length=1, max_length=1100)
+    footer: str | None = Field(None, max_length=80)
+
+
+async def _template_for(conn: Any, user: Any, template_id: str) -> dict[str, Any]:
+    t = await fetch_one(conn, "select * from wa_templates where id = %s", (template_id,))
+    if not t:
+        raise services.NotFound("not found")
+    await require_member(conn, user, t["business_id"])
+    return t
+
+
+@channels_api.put("/whatsapp-templates/{template_id}")
+async def edit_whatsapp_template(user: CurrentUser, template_id: str, body: TemplateEdit) -> dict[str, Any]:
+    async with connection() as conn:
+        t = await _template_for(conn, user, template_id)
+        if t["status"] not in ("draft", "rejected"):
+            raise services.Conflict("This template is already with Meta; draft a new one to change it.")
+        row = await fetch_one(conn, """update wa_templates set body = %s, footer = %s, status = 'draft', updated_at = now()
+                                       where id = %s returning *""", (body.body, body.footer, template_id))
+    return _template_out(row)  # type: ignore[arg-type]
+
+
+@channels_api.post("/whatsapp-templates/{template_id}/submit")
+async def submit_whatsapp_template(user: CurrentUser, template_id: str) -> dict[str, Any]:
+    async with connection() as conn:
+        t = await _template_for(conn, user, template_id)
+        acct = await whatsapp.account(conn, t["business_id"])
+    if t["status"] not in ("draft", "rejected"):
+        raise services.Conflict(f"Already {t['status']}.")
+    if problems := wa_template.problems(t):
+        raise services.Conflict("Fix this first: " + " ".join(problems))
+    if not acct:
+        raise services.Conflict("Connect WhatsApp first, on the Channels page.")
+    try:
+        res = await whatsapp.submit_template(acct, t)
+    except meta.MetaError as e:
+        raise _meta_error(e) from e
+    async with connection() as conn:
+        row = await fetch_one(conn, """update wa_templates set status = %s, meta_id = %s, reason = null,
+                                         submitted_at = now(), updated_at = now() where id = %s returning *""",
+                              (res["status"], res["id"], template_id))
+        await ledger.record(conn, t["business_id"], "whatsapp.template", f"Sent WhatsApp template {t['name']} to Meta "
+                            "for approval", actor="owner", payload={"template_id": template_id})
+    return _template_out(row)  # type: ignore[arg-type]
+
+
+@channels_api.get("/businesses/{slug}/whatsapp-templates")
+async def list_whatsapp_templates(user: CurrentUser, slug: str) -> dict[str, Any]:
+    async with connection() as conn:
+        b = await business_for(conn, user, slug)
+        acct = await whatsapp.account(conn, b["id"])
+        waiting = await fetch_one(conn, "select count(*)::int as n from wa_templates where business_id = %s and status = 'pending'",
+                                  (b["id"],))
+    synced, error = False, None
+    if acct and waiting and waiting["n"] and (acct.get("meta") or {}).get("waba_id"):
+        try:
+            await whatsapp.sync_templates(acct)
+            synced = True
+        except meta.MetaError as e:
+            error = f"Meta said: {e}"
+    async with connection() as conn:
+        rows = await fetch_all(conn, "select * from wa_templates where business_id = %s order by updated_at desc", (b["id"],))
+    return {"templates": [_template_out(r) for r in rows], "synced": synced, "error": error,
+            "can_submit": bool(acct and (acct.get("meta") or {}).get("waba_id"))}
 
 
 class Picture(BaseModel):
@@ -220,3 +332,116 @@ async def whatsapp_events(request: Request, bg: BackgroundTasks) -> dict[str, st
         raise HTTPException(400, "not json") from e
     bg.add_task(whatsapp.handle, payload, get_router(request))
     return {"ok": "received"}
+
+
+# ------------------------------------------------------------------ Google Business Profile
+
+
+async def _google_post(conn: Any, asset_id: str) -> tuple[dict[str, Any], dict[str, Any], str]:
+    """-> (localPost, asset, headline) for a live post."""
+    from app.storage import get_storage
+
+    asset = await services.get_asset(conn, asset_id)
+    tp = await fetch_one(conn, "select code from touchpoints where asset_id = %s", (asset_id,))
+    if asset["status"] != "live" or not tp:
+        raise services.Conflict("Approve the post first; the Google offer needs its code and tracked link.")
+    c = await services.get_campaign(conn, asset["campaign_id"])
+    rev = (await services.current_revision(conn, asset_id)) or {}
+    rendered = rev.get("rendered") or {}
+    sheet = await services.locked_sheet(conn, c["id"])
+    facts = [f.model_dump() for f in sheet.facts] if sheet else []
+    rules = redeem.rules(facts, starts_on=c.get("starts_on"), ends_on=c.get("ends_on"))
+    lang = asset["language"]
+    post = google_business.offer_post(
+        language=lang, headline=rendered.get("headline", ""), body=rendered.get("body", ""),
+        offer=[f["display"].get(lang) or f["display"].get("en", "") for f in facts if f["type"] != "condition"],
+        conditions=[f["display"].get(lang) or f["display"].get("en", "") for f in facts if f["type"] == "condition"],
+        code=tp["code"], link=f"{get_settings().public_base_url.rstrip('/')}/r/{tp['code']}",
+        starts_on=rules.start, ends_on=rules.end,
+        photo_url=get_storage().url(rev["image_key"]) if rev.get("image_key") else None)
+    return post, asset, rendered.get("headline", "")
+
+
+@channels_api.get("/assets/{asset_id}/google-post")
+async def google_post(user: CurrentUser, asset_id: str) -> dict[str, Any]:
+    """The post as a Google Business Profile offer: ready to publish, or to paste into business.google.com."""
+    b = await _business_of_asset(user, asset_id)
+    async with connection() as conn:
+        post, _asset, headline = await _google_post(conn, asset_id)
+        acct = await google_business.account(conn, b["id"])
+        done = await fetch_all(conn, "select name, search_url, state, created_at from google_posts where asset_id = %s "
+                                     "order by created_at desc", (asset_id,))
+    return {"post": post, "problems": google_business.problems(post, headline), "configured": google_business.configured(),
+            "connected": bool(acct and (acct["meta"] or {}).get("location")), "posted": done}
+
+
+@channels_api.post("/assets/{asset_id}/google-post")
+async def publish_google_post(user: CurrentUser, asset_id: str) -> dict[str, Any]:
+    b = await _business_of_asset(user, asset_id)
+    async with connection() as conn:
+        post, asset, _ = await _google_post(conn, asset_id)
+        acct = await google_business.account(conn, b["id"])
+    if not acct:
+        raise services.Conflict("Connect your Google Business Profile first, on the Channels page.")
+    if "startDate" not in post["event"]["schedule"] or "endDate" not in post["event"]["schedule"]:
+        raise services.Conflict("Google needs the offer's start and end dates; add a date range to the offer.")
+    try:
+        res = await google_business.publish(acct, post)
+    except google_business.GoogleError as e:
+        raise services.Conflict(f"Google said: {e}") from e
+    async with connection() as conn:
+        await conn.execute("""insert into google_posts (name, business_id, asset_id, search_url, state)
+                              values (%s, %s, %s, %s, %s) on conflict (name) do nothing""",
+                           (res.get("name"), b["id"], asset_id, res.get("searchUrl"), res.get("state")))
+        await ledger.record(conn, b["id"], "google.posted", f"Posted the {services.asset_label(asset)} as an offer on "
+                            "Google", actor="owner", campaign_id=asset["campaign_id"], payload={"name": res.get("name")})
+    return {"ok": True, "search_url": res.get("searchUrl"), "state": res.get("state")}
+
+
+@channels_api.get("/businesses/{slug}/channels/google/connect")
+async def google_connect(user: CurrentUser, slug: str) -> dict[str, str]:
+    async with connection() as conn:
+        b = await business_for(conn, user, slug)
+    if not google_business.configured():
+        raise services.Conflict("Google sign-in is not set up on this server (GOOGLE_OAUTH_CLIENT_ID and "
+                                "GOOGLE_OAUTH_CLIENT_SECRET). Use 'Copy for Google' on a post meanwhile.")
+    return {"url": google_business.auth_url(google_business.state_for(b["id"], b["slug"]))}
+
+
+class GoogleLocation(BaseModel):
+    location: str = Field(pattern=r"^accounts/[^/]+/locations/[^/]+$")
+
+
+@channels_api.put("/businesses/{slug}/channels/google")
+async def google_choose(user: CurrentUser, slug: str, body: GoogleLocation) -> dict[str, Any]:
+    async with connection() as conn:
+        b = await business_for(conn, user, slug)
+        acct = await google_business.account(conn, b["id"])
+        locs = {loc["name"]: loc for loc in ((acct or {}).get("meta") or {}).get("locations") or []}
+        if body.location not in locs:
+            raise services.NotFound("not found")
+        await conn.execute(
+            """update channel_accounts set external_id = %s, display = %s, meta = meta || %s
+               where business_id = %s and channel = 'google_business'""",
+            (body.location, locs[body.location]["title"], jsonb({"location": body.location}), b["id"]))
+        await ledger.record(conn, b["id"], "channel.connected", f"Google Business Profile: {locs[body.location]['title']}",
+                            actor="owner")
+    return {"ok": True}
+
+
+@webhook.get("/google/callback")
+async def google_callback(state: str = "", code: str | None = None, error: str | None = None) -> RedirectResponse:
+    """Google sends the owner back here after sign-in. The state is signed, so only a connect we started counts."""
+    base = get_settings().public_base_url.rstrip("/")
+    who = google_business.read_state(state) if google_business.configured() else None
+    if not who or not code:
+        return RedirectResponse(f"{base}/channels?google=error&why={'cancelled' if error else 'expired'}", 303)
+    try:
+        res = await google_business.connect(who[0], code)
+    except google_business.GoogleError as e:
+        from urllib.parse import quote
+
+        return RedirectResponse(f"{base}/channels?google=error&why={quote(str(e)[:200])}", 303)
+    async with connection() as conn:
+        await ledger.record(conn, who[0], "channel.connected", "Google Business Profile connected", actor="owner")
+    return RedirectResponse(f"{base}/channels?google={'connected' if res['chosen'] else 'choose'}", 303)

@@ -20,6 +20,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.domain import language, redeem
+
 # ------------------------------------------------------------------ models
 
 FactType = Literal["percent", "price", "date_range", "time_range", "item", "condition", "text"]
@@ -86,7 +88,7 @@ _SCRIPTS = {"kn": ("Kannada", r"[\u0C80-\u0CFF]"), "hi": ("Hindi (Devanagari)", 
 
 
 def wording_issues(sheet: FactSheet) -> list[dict[str, str]]:
-    """Deterministic checks of each translated fact wording: well-formed script, same numbers as the English."""
+    """Deterministic checks of each translated fact wording: well-formed script, same numbers and days as the English."""
     issues = []
     for f in sheet.facts:
         base = f.display.get("en")
@@ -103,6 +105,8 @@ def wording_issues(sheet: FactSheet) -> list[dict[str, str]]:
             elif want is not None and sorted(numbers_in(wording)) != want:
                 issues.append({"key": f.key, "label": f.label, "lang": lang, "wording": wording,
                                "issue": f"Its numbers differ from the English ({', '.join(want) or 'none'})."})
+            elif base is not None and (why := language.day_mismatch(base, wording, lang)):
+                issues.append({"key": f.key, "label": f.label, "lang": lang, "wording": wording, "issue": why})
     return issues
 
 
@@ -356,6 +360,24 @@ def deterministic_checks(
                         "No doubled words." if not doubled else f"Says “{doubled[0]}” twice around an offer detail",
                         evidence=doubled))
 
+    # L2: times of day that contradict the offer's hours ("night coffee" for a 4 to 7 pm offer)
+    wrong_time: list[str] = []
+    if hours := _hours(sheet):
+        wrong_time = language.time_mismatch(" ".join(authored), lang, hours)
+    checks.append(Check("L2", "times_match", not wrong_time,
+                        "Every time of day fits the offer's hours." if not wrong_time else
+                        f"Says {', '.join(wrong_time)}, but the offer runs {hours[0]}:00 to {hours[1]}:00"
+                        if hours else "", evidence=wrong_time))
+
+    # L2: days that are not offer days ("this weekend" for a weekdays-only offer)
+    offer_days = redeem.rules([f.model_dump() for f in sheet.facts]).days
+    named = language.days_in(" ".join(authored), lang) if offer_days is not None else None
+    wrong_days = sorted(named - offer_days) if named else []
+    checks.append(Check("L2", "days_match", not wrong_days,
+                        "Every day it names is an offer day." if not wrong_days else
+                        f"Names {', '.join(redeem.DAY_NAMES[d].title() for d in wrong_days)}, which the offer does not "
+                        "run on", evidence=[redeem.DAY_NAMES[d] for d in wrong_days]))
+
     # L2: forbidden claims, any language (customers code-switch). The campaign's own list plus a built-in one,
     # so blocking "free" in Kannada never depends on a model-written translation.
     full = " ".join([rendered[f] for f in TEXT_FIELDS] + rendered["hashtags"])
@@ -393,6 +415,14 @@ def deterministic_checks(
                         "Every line cites its source." if not unsourced else
                         f"{len(unsourced)} line(s) without a source", severity="warn", evidence=unsourced[:3]))
     return checks
+
+
+def _hours(sheet: FactSheet) -> tuple[int, int] | None:
+    """The offer's hours as whole hours, from its time_range fact ("16:00-19:00")."""
+    for f in sheet.facts:
+        if f.type == "time_range" and (m := re.search(r"(\d{1,2})[:.]\d{2}\s*-\s*(\d{1,2})[:.]\d{2}", str(f.value))):
+            return int(m.group(1)), int(m.group(2))
+    return None
 
 
 def report(checks: list[Check], *, facts_version: int, l3_status: str) -> dict[str, Any]:

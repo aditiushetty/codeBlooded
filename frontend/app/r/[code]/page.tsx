@@ -2,6 +2,7 @@
 
 import { ArrowRight, Check, MapPin, Storefront, WhatsappLogo } from "@phosphor-icons/react";
 import { use, useEffect, useRef, useState } from "react";
+import { ComeBackCard } from "@/components/come-back";
 import { ReviewForm } from "@/components/review-form";
 import { useClaimStatus } from "@/lib/claim";
 
@@ -218,6 +219,7 @@ export default function OfferPage({ params }: { params: Promise<{ code: string }
           )}
         </div>
 
+        {claim?.status === "redeemed" && live?.come_back && <ComeBackCard code={live.come_back.code} until={live.come_back.valid_until} language={data.language} />}
         {claim?.status === "redeemed" && live && (
           <div className="mt-6">
             <ReviewForm code={claim.code} language={data.language} existing={live.review} googleUrl={live.google_review_url} />

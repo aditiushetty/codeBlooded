@@ -84,7 +84,7 @@ In Instagram, go to **Profile → ☰ → Account type and tools → Switch to p
 First make sure Counterpart is running and your business has at least one approved post.
 
 ```sh
-cd ~/Desktop/Hackerring/backend
+cd ~/Downloads/counterpart-main/backend
 uv run python -m scripts.go_live
 ```
 

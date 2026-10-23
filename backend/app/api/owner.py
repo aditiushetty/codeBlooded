@@ -12,15 +12,15 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from app import ledger, reviews, services
-from app.agent import runtime, situation
+from app import ledger, results, reviews, services
+from app.agent import runtime, situation, team
 from app.agent.tools import DraftFactsArgs
 from app.api.deps import get_router, require_owner, tool_context
 from app.auth import CurrentUser, User, business_for, require_member
 from app.channels import instagram, meta, whatsapp
 from app.config import get_settings
 from app.db import connection, fetch_all, fetch_one, jsonb
-from app.domain import analytics, culture, redeem
+from app.domain import bills, culture, redeem
 from app.domain.facts import AssetContent
 from app.storage import get_storage
 
@@ -80,7 +80,7 @@ async def customers(user: CurrentUser, slug: str, request: Request, bg: Backgrou
         themes = await situation.theme_trends(conn, b["id"], days=days)
         recent = await fetch_all(
             conn, """select ci.id, ci.source, ci.language, ci.segment, ci.rating, ci.body, ci.occurred_at, ci.sentiment,
-                            ci.themes, ci.translation, ci.reply, ci.replied_at, ci.claim_code, c.name as campaign,
+                            ci.themes, ci.translation, ci.reply, ci.replied_at, ci.reply_draft, ci.claim_code, c.name as campaign,
                             cl.via, ci.category, ci.author
                      from customer_interactions ci left join campaigns c on c.id = ci.campaign_id
                      left join claims cl on cl.code = ci.claim_code
@@ -275,15 +275,14 @@ async def get_campaign(user: CurrentUser, campaign_id: str) -> dict[str, Any]:
         a["image_source"] = ({"source": p["source"], "attribution": p["attribution"], "caption": p["caption"]} if p
                              else {"source": "generated"} if rev.get("image_key") else None)
     festivals = culture.relevant(f"{c['name']} {c.get('brief') or ''} {json.dumps(c.get('intent') or {})}",
-                                 c.get("starts_on"), c.get("ends_on"))
-    return {"campaign": c, "facts": facts, "assets": assets, "experiments": exps, "inbox": inbox,
+                                 c.get("starts_on"), c.get("ends_on")) if get_settings().festivals else []
+    async with connection() as conn:
+        so_far = await results.effort_for(conn, campaign_id)
+    return {"campaign": c, "facts": facts, "assets": assets, "experiments": exps, "inbox": inbox, "effort": so_far,
             "culture": [culture.card(f, b["languages"], today=_today()) for f in festivals]}
 
 
 IST = ZoneInfo("Asia/Kolkata")
-CHANNEL_NAMES = {"instagram_post": "Instagram posts", "instagram_story": "Instagram stories", "poster": "Counter posters",
-                 "whatsapp": "WhatsApp"}
-LANGUAGE_NAMES = {"en": "English", "kn": "Kannada", "hi": "Hindi"}
 
 
 def _today() -> date:
@@ -297,43 +296,9 @@ async def campaign_analytics(user: CurrentUser, campaign_id: str, bg: Background
         c = await services.get_campaign(conn, campaign_id)
         await require_member(conn, user, c["business_id"])
         b = await services.get_business_by_id(conn, c["business_id"])
-        posts = await fetch_all(
-            conn, """select a.id::text as asset_id, t.code, a.channel, a.language, a.segment, a.variant,
-                            r.rendered->>'headline' as headline
-                     from touchpoints t join assets a on a.id = t.asset_id
-                     left join asset_revisions r on r.asset_id = a.id and r.n = a.current_revision
-                     where t.campaign_id = %s order by a.created_at""", (campaign_id,))
-        events = await fetch_all(
-            conn, """select asset_id::text, type, qty, source, occurred_at at time zone 'Asia/Kolkata' as at,
-                            (meta->>'bill_amount')::float as bill
-                     from outcome_events where campaign_id = %s""", (campaign_id,))
-        exps = [await services.experiment_status(conn, e["id"]) for e in await fetch_all(
-            conn, "select id from experiments where campaign_id = %s and status <> 'decided'", (campaign_id,))]
-        ids = [p["asset_id"] for p in posts]
-        ratings = {r["asset_id"]: {"n": r["n"], "average": r["average"]} for r in await fetch_all(
-            conn, """select asset_id::text as asset_id, count(*)::int as n, round(avg(rating)::numeric, 1)::float as average
-                     from customer_interactions where campaign_id = %s and source = 'visit_review' and rating is not null
-                     group by asset_id""", (campaign_id,))}
-        channels = {"whatsapp": await whatsapp.stats(conn, ids), "instagram": await instagram.stats(conn, ids),
-                    "instagram_connected": await instagram.account(conn, b["id"]) is not None,
-                    "whatsapp_connected": await whatsapp.account(conn, b["id"]) is not None}
-    if channels["instagram_connected"]:
+        out = await results.campaign(conn, c, b)
+    if out["channels"]["instagram_connected"]:
         bg.add_task(instagram.sync, b["id"])  # re-reads only insights older than an hour
-    today = _today()
-    created = c["created_at"].astimezone(IST).date()
-    first = min((e["at"].date() for e in events), default=created)
-    langs = b.get("languages") or ["en"]
-    text = f"{c['name']} {c.get('brief') or ''}"
-    festivals = {f.key: f for f in culture.relevant(text, c.get("starts_on"), c.get("ends_on"))}
-    festivals.update({f.key: f for f, *_ in culture.upcoming(today, days=14)})
-    out = analytics.summarize(
-        posts, events, today=today, since=min(first, created),
-        labels={"channel": CHANNEL_NAMES, "language": LANGUAGE_NAMES},
-        festivals=[culture.card(f, langs, today=today) for f in festivals.values()],
-        experiments=[{"winner": next((a["variant"] for a in e["arms"] if a["asset_id"] == e["decision"]["winner"]),
-                                     e["decision"]["winner"]), "arms": e["arms"]} for e in exps])
-    out["channels"] = channels
-    out["ratings"] = ratings  # stars from verified visits, per post that brought them
     return out
 
 
@@ -343,6 +308,8 @@ async def business_culture(user: CurrentUser, slug: str) -> dict[str, Any]:
     async with connection() as conn:
         b = await business_for(conn, user, slug)
     today = _today()
+    if not get_settings().festivals:
+        return {"festivals": []}
     return {"festivals": [culture.card(f, b["languages"], today=today) for f, *_ in culture.upcoming(today, days=60)]}
 
 
@@ -456,7 +423,8 @@ async def lock_facts(user: CurrentUser, campaign_id: str, request: Request, bg: 
         c = await services.get_campaign(conn, campaign_id)
         await require_member(conn, user, c["business_id"])
         b = await services.get_business_by_id(conn, c["business_id"])
-        res = await services.lock_facts(conn, c, actor="owner")
+        res = await services.lock_facts(conn, c, actor="owner",
+                                        verifier_available=get_router(request).available("verification"))
         # Approving in advance covers only this offer version: a later change asks again.
         await conn.execute("update campaigns set autopublish_version = %s where id = %s",
                            (res["facts"]["version"] if autopublish else None, campaign_id))
@@ -508,6 +476,23 @@ async def publish(user: CurrentUser, campaign_id: str, body: PublishBody, reques
     if not res.get("ok"):
         raise services.Conflict(res.get("error") or res.get("precondition_failed") or "Could not publish.")
     return res
+
+
+class ReturnCodes(BaseModel):
+    days: int | None = Field(None, ge=1, le=60, description="Days a come-back code stays valid; null turns them off.")
+
+
+@api.put("/campaigns/{campaign_id}/return-codes")
+async def set_return_codes(user: CurrentUser, campaign_id: str, body: ReturnCodes) -> dict[str, Any]:
+    """Come-back codes: each customer whose code is used gets one more code for the same offer, for `days` days."""
+    async with connection() as conn:
+        c = await services.get_campaign(conn, campaign_id)
+        await require_member(conn, user, c["business_id"])
+        await conn.execute("update campaigns set return_days = %s where id = %s", (body.days, campaign_id))
+        await ledger.record(conn, c["business_id"], "campaign.return_codes",
+                            f"Come-back codes {'on: ' + str(body.days) + ' days' if body.days else 'off'}",
+                            actor="owner", campaign_id=campaign_id, payload={"days": body.days})
+    return {"return_days": body.days}
 
 
 # ------------------------------------------------------------------ assets
@@ -581,20 +566,47 @@ class Decision(BaseModel):
 @api.post("/inbox/{item_id}/decision")
 async def decide(user: CurrentUser, item_id: str, body: Decision, request: Request, bg: BackgroundTasks) -> dict[str, Any]:
     async with connection() as conn:
-        item = await fetch_one(conn, "select business_id, campaign_id, title from inbox_items where id = %s",
-                               (item_id,))
+        item = await fetch_one(conn, """select business_id, campaign_id, kind, title, payload
+                                        from inbox_items where id = %s""", (item_id,))
         if not item:
             raise services.NotFound("inbox item not found")
         await require_member(conn, user, item["business_id"])
         b = await services.get_business_by_id(conn, item["business_id"])
     res = await runtime.decide_inbox(tool_context(request, b, None, actor="owner"), item_id,
                                      approve=body.approve, note=body.note)
+    p = item["payload"] or {}
+    if body.approve and p.get("brief"):  # a follow-up campaign the Customer listener (or another agent) suggested
+        async with connection() as conn:
+            c = await services.create_campaign(conn, b["id"], name=item["title"][:60], brief=p["brief"])
+        res["campaign_id"] = str(c["id"])
+        if body.resume:
+            bg.add_task(runtime.run, tool_context(request, b, str(c["id"])),
+                        f"New brief from the owner (suggested by the {AGENT_NAMES.get(p.get('asked_by'), 'team')}): {p['brief']}")
+        return res
     if body.resume and item["campaign_id"]:  # an employee carries on once the owner has decided
-        verdict = "approved" if body.approve else "declined"
-        bg.add_task(runtime.run, tool_context(request, b, str(item["campaign_id"])),
-                    f"The owner {verdict}: {item['title']}" + (f" Note: {body.note}" if body.note else "")
-                    + ". Carry on with the campaign.")
+        who = AGENT_NAMES.get(p.get("asked_by"), "Offer agent")
+        if item["kind"] == "question":
+            task = {"brief": "finish the campaign plan"}.get(p.get("asked_by"), "update the offer draft")
+            trigger = (f"The owner answered the {who}'s question \"{item['title']}\": {body.note}. "
+                       f"Ask the {who} to {task}." if body.approve
+                       else f"The owner skipped the question \"{item['title']}\". Carry on without it.")
+        elif item["kind"] == "recommendation" and p.get("instruction"):
+            if not body.approve:
+                return res  # a declined suggestion needs no work
+            trigger = (f"The owner said yes to the {who}'s suggestion \"{item['title']}\". Do it: {p['instruction']}"
+                       + (f" Owner's note: {body.note}" if body.note else ""))
+        elif item["kind"] in ("recommendation", "finding"):
+            return res  # read and dismissed: nothing for the team to do
+        else:
+            verdict = "approved" if body.approve else "declined"
+            trigger = (f"The owner {verdict}: {item['title']}" + (f" Note: {body.note}" if body.note else "")
+                       + ". Carry on with the campaign.")
+        bg.add_task(runtime.run, tool_context(request, b, str(item["campaign_id"])), trigger)
     return res
+
+
+AGENT_NAMES = {"brief": "Brief agent", "offer": "Offer agent", "change": "Change agent", "analyst": "Analyst",
+               "listener": "Customer listener", "scout": "Scout"}
 
 
 class CounterCode(BaseModel):
@@ -629,6 +641,47 @@ async def counter_redeem(user: CurrentUser, body: CounterRedeem, bg: BackgroundT
     if out.get("via") == "whatsapp":
         bg.add_task(whatsapp.ask_review, out["code"])  # "How was it?" inside the free 24-hour window
     return out
+
+
+class BillImport(BaseModel):
+    text: str = Field(min_length=10, max_length=2_000_000, description="The statement as CSV text.")
+    apply: bool = Field(False, description="False: show what would match. True: save the matched bills.")
+
+
+@api.post("/businesses/{slug}/bills/import")
+async def import_bills(user: CurrentUser, slug: str, body: BillImport) -> dict[str, Any]:
+    """A UPI, card-machine or bank statement (CSV) matched to the codes redeemed at the counter, so each post's
+    sales are real numbers. Only redemptions without a typed bill are filled; nothing else changes."""
+    payments, problems = bills.parse(body.text)
+    if not payments:
+        raise services.Conflict(" ".join(problems) or "No incoming payments found in that file.")
+    lo = min(p["at"] for p in payments) - timedelta(hours=1)
+    hi = max(p["at"] for p in payments) + timedelta(days=1 if not any(p["has_time"] for p in payments) else 0, hours=1)
+    async with connection() as conn:
+        b = await business_for(conn, user, slug)
+        rows = await fetch_all(
+            conn, """select o.id, coalesce(o.meta->>'claim', o.touchpoint_code) as code, o.touchpoint_code as post_code,
+                            o.occurred_at at time zone 'Asia/Kolkata' as at, (o.meta->>'bill_amount')::float as bill_amount,
+                            c.name as campaign
+                     from outcome_events o join campaigns c on c.id = o.campaign_id
+                     where c.business_id = %s and o.type = 'redeem' and o.source = 'counter'
+                       and o.occurred_at at time zone 'Asia/Kolkata' between %s and %s""", (b["id"], lo, hi))
+        result = bills.match(payments, rows)
+        names = {r["code"]: r["campaign"] for r in rows}
+        for m in result["matches"]:
+            m["campaign"] = names.get(m["code"])
+        if body.apply and result["matches"]:
+            ids = {r["code"]: r["id"] for r in rows}
+            for m in result["matches"]:
+                await conn.execute("""update outcome_events set meta = meta || %s where id = %s""",
+                                   (jsonb({"bill_amount": m["amount"], "bill_source": "import"}), ids[m["code"]]))
+                await conn.execute("update claims set bill_amount = %s where code = %s and bill_amount is null",
+                                   (m["amount"], m["code"]))
+            await ledger.record(conn, b["id"], "bills.imported",
+                                f"Matched {len(result['matches'])} payments to redeemed codes "
+                                f"(₹{result['totals']['matched_sales']:,.0f} of ₹{result['totals']['sales']:,.0f} in the statement)",
+                                actor="owner", payload=result["totals"])
+    return {**result, "problems": problems, "applied": body.apply, "redemptions_in_range": len(rows)}
 
 
 @api.get("/businesses/{slug}/counter")
@@ -690,6 +743,32 @@ async def business_agent(user: CurrentUser, slug: str, body: AgentMessage, reque
     async with connection() as conn:
         b = await business_for(conn, user, slug)
     bg.add_task(runtime.run, tool_context(request, b, None), body.message)
+    return {"status": "accepted"}
+
+
+@api.post("/campaigns/{campaign_id}/analyst")
+async def ask_analyst(user: CurrentUser, campaign_id: str, request: Request, bg: BackgroundTasks) -> dict[str, str]:
+    """The owner asks the Analyst directly: read the results, propose the next move (it lands in the inbox)."""
+    async with connection() as conn:
+        c = await services.get_campaign(conn, campaign_id)
+        await require_member(conn, user, c["business_id"])
+        b = await services.get_business_by_id(conn, c["business_id"])
+        live = await fetch_one(conn, "select count(*)::int as n from touchpoints where campaign_id = %s", (campaign_id,))
+    if not live or not live["n"]:
+        raise services.Conflict("Nothing is live yet, so there are no results to read.")
+    bg.add_task(runtime.run_specialist, tool_context(request, b, campaign_id), team.ANALYST,
+                "The owner asked how the campaign is going. Read the results and propose the next move.")
+    return {"status": "accepted"}
+
+
+@api.post("/businesses/{slug}/listener")
+async def ask_listener(user: CurrentUser, slug: str, request: Request, bg: BackgroundTasks) -> dict[str, str]:
+    """The owner asks the Customer listener to go through recent reviews and comments."""
+    async with connection() as conn:
+        b = await business_for(conn, user, slug)
+    bg.add_task(runtime.run_specialist, tool_context(request, b, None), team.LISTENER,
+                "Go through what customers said recently: raise issues several share, draft replies, and suggest a "
+                "follow-up campaign if one fits.")
     return {"status": "accepted"}
 
 

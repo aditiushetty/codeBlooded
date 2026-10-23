@@ -24,3 +24,23 @@ def affected_assets(revisions: list[dict[str, Any]], changed: set[str], *, all_i
     if all_if:
         return [str(r["asset_id"]) for r in revisions]
     return [str(r["asset_id"]) for r in revisions if changed & set(r.get("fact_keys") or [])]
+
+
+def change_plan(revisions: list[dict[str, Any]], changed: set[str], *, all_if: bool = False) -> dict[str, list[str]]:
+    """What an offer change means for each post. revisions: [{asset_id, fact_keys, written_keys}], where
+    written_keys are the slots in the text the Writer wrote (headline, body).
+
+      rewrite   - its own text uses a changed detail: the Writer writes it again
+      refill    - only the offer box under it changes: the system refills it from the new offer and re-checks it
+      untouched - shows nothing that changed
+    """
+    out: dict[str, list[str]] = {"rewrite": [], "refill": [], "untouched": []}
+    for r in revisions:
+        shows = set(r.get("fact_keys") or [])
+        if not (all_if or changed & shows):
+            out["untouched"].append(str(r["asset_id"]))
+        elif changed & set(r.get("written_keys") or []):
+            out["rewrite"].append(str(r["asset_id"]))
+        else:
+            out["refill"].append(str(r["asset_id"]))
+    return out

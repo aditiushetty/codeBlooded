@@ -205,3 +205,48 @@ async def read_link(router: Any, link: str) -> dict[str, Any]:
     if out["offerings"]:
         notes.append(f"Found {len(out['offerings'])} items with prices. Check them, and add what you pay for each if you like.")
     return {**out, "notes": notes}
+
+
+# ------------------------------------------------------------------ the menu, spoken
+
+
+class SpokenItem(BaseModel):
+    name: str = Field(description="The item in English letters, as Indians write it (e.g. 'Masala Dosa')")
+    price: float = Field(gt=0, description="Price in rupees as said, in digits")
+    said: str | None = Field(None, description="The item's name as spoken, in its own script, if not English")
+
+
+class Spoken(BaseModel):
+    items: list[SpokenItem] = Field(default_factory=list)
+
+
+SPOKEN_SYSTEM = """The owner of a small Indian business read their menu or price list aloud. You get what they said
+(possibly Kannada or Hindi) and an English translation of it. List every item they gave a price for, in the order
+said. Prices are rupees; write spoken numbers ("ಇಪ್ಪತ್ತೈದು", "pachees", "twenty five") as digits. Never invent an
+item or a price, never round; skip items said without a price. Reply with JSON {"items": [{"name", "price", "said"}]}."""
+
+_DIGITS = str.maketrans("೦೧೨೩೪೫೬೭೮೯०१२३४५६७८९", "01234567890123456789")
+
+
+def spoken_checked(found: Spoken, said: str, english: str | None) -> list[dict[str, Any]]:
+    """Each item, with check=True when its price is not written as digits in what was said or in the English
+    translation (spoken number words): the owner confirms those on the review page."""
+    heard = f"{said} {english or ''}".translate(_DIGITS)
+    out, seen = [], set()
+    for it in found.items[:40]:
+        key = _norm(it.name)
+        if len(key) < 2 or key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": it.name.strip()[:80], "price": it.price, "said": it.said,
+                    "check": not _price_shown(it.price, heard)})
+    return out
+
+
+async def menu_from_speech(router: Any, said: str, language: str, english: str | None) -> list[dict[str, Any]]:
+    found, _ = await router.chat_json(
+        "reasoning", [{"role": "system", "content": SPOKEN_SYSTEM},
+                      {"role": "user", "content": json.dumps({"language": language, "said": said,
+                                                              "english": english}, ensure_ascii=False)}],
+        Spoken, temperature=0)
+    return spoken_checked(found, said, english)

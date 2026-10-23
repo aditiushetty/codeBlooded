@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDownRight, ArrowRight, ArrowUpRight, ChatCircleText, ClipboardText, ForkKnife, Globe, GoogleLogo, InstagramLogo, Plus, SealCheck, Star, WhatsappLogo } from "@phosphor-icons/react";
+import { ArrowDownRight, ArrowRight, ArrowUpRight, ChatCircleText, ClipboardText, Ear, ForkKnife, Globe, GoogleLogo, InstagramLogo, Plus, SealCheck, Star, WhatsappLogo } from "@phosphor-icons/react";
 import clsx from "clsx";
 import { useState } from "react";
 import { GoogleLink, needsReply, ReplyBox, type ReviewRow, VisitSummary, type Visits } from "@/components/review-desk";
@@ -19,6 +19,29 @@ interface Customers {
   google_review_url: string | null;
   insights: { kind: string; key: string; period_start: string | null; period_end: string | null; data: Record<string, any> }[];
   language_mix: { language: string; n: number; sentiment: number | null }[];
+}
+
+/** The Customer listener goes through recent reviews: issues and follow-ups reach the inbox, reply drafts appear here. */
+function ListenButton({ slug }: { slug: string }) {
+  const [state, setState] = useState<"idle" | "busy" | "asked">("idle");
+  return (
+    <Button
+      variant="primary"
+      disabled={state !== "idle"}
+      trailing={<Ear size={14} weight="bold" />}
+      onClick={async () => {
+        setState("busy");
+        try {
+          await api(`/businesses/${slug}/listener`, { method: "POST" });
+          setState("asked");
+        } catch {
+          setState("idle");
+        }
+      }}
+    >
+      {state === "busy" ? "Asking…" : state === "asked" ? "Listening: drafts appear below" : "Ask the Customer listener"}
+    </Button>
+  );
 }
 
 const human = (s: string) => s.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
@@ -76,7 +99,7 @@ function Rating({ n }: { n: number }) {
 
 export default function CustomersPage() {
   const business = useBusiness();
-  const { data, reload } = useResource<Customers>(`/businesses/${business.slug}/customers`, (e) => e.type.startsWith("customers."));
+  const { data, reload } = useResource<Customers>(`/businesses/${business.slug}/customers`, (e) => e.type.startsWith("customers.") || e.type.startsWith("listener."));
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<(typeof FILTERS)[number]["key"]>("all");
   const shown = (data?.recent ?? []).filter((r) =>
@@ -126,11 +149,14 @@ export default function CustomersPage() {
         title="What customers are saying"
         sub={data ? `${total} reviews and messages, read in every language they were written in. Topics compare the last 14 days with the 14 before.` : undefined}
         aside={
-          business.is_demo && (
-            <Button onClick={injectDemo} disabled={busy} trailing={<Plus size={13} weight="bold" />}>
-              {busy ? "Adding…" : "Add demo reviews"}
-            </Button>
-          )
+          <div className="flex flex-wrap gap-2">
+            <ListenButton slug={business.slug} />
+            {business.is_demo && (
+              <Button variant="ghost" onClick={injectDemo} disabled={busy} trailing={<Plus size={13} weight="bold" />}>
+                {busy ? "Adding…" : "Add demo reviews"}
+              </Button>
+            )}
+          </div>
         }
       />
 

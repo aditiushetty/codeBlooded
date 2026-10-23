@@ -8,12 +8,13 @@ Rules that make the system trustworthy live here, not in prompts:
     against the currently locked fact version.
 """
 
+import dataclasses
 import hashlib
 import hmac
 import json
 import secrets
 from dataclasses import asdict
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -32,9 +33,10 @@ from app.domain.facts import (
     deterministic_checks,
     render,
     report,
+    slot_keys,
     wording_issues,
 )
-from app.domain.impact import affected_assets, changed_fact_keys, forbidden_changed
+from app.domain.impact import change_plan, changed_fact_keys, forbidden_changed
 from app.domain.stats import Arm, decide, prior_from_history
 from app.providers.base import ProviderError
 from app.providers.router import ModelRouter
@@ -232,8 +234,10 @@ async def check_fact_wording(router: ModelRouter, conn_factory: Any, campaign_id
     return check
 
 
-async def lock_facts(conn: Conn, campaign: dict[str, Any], *, actor: ledger.Actor) -> dict[str, Any]:
-    """Lock the draft. If it replaces a locked version, mark dependent assets stale."""
+async def lock_facts(conn: Conn, campaign: dict[str, Any], *, actor: ledger.Actor,
+                     verifier_available: bool = True) -> dict[str, Any]:
+    """Lock the draft. If it replaces a locked version, posts that show a changed detail are updated: the ones whose
+    own text uses it go stale for the Writer, the rest get their offer box refilled here and re-checked."""
     draft = await facts_row(conn, campaign["id"], "draft")
     if not draft:
         raise Conflict("There is no draft of the offer facts to lock.")
@@ -252,29 +256,48 @@ async def lock_facts(conn: Conn, campaign: dict[str, Any], *, actor: ledger.Acto
     )
     assert row
     stale: list[str] = []
+    refilled: list[str] = []
     changed: set[str] = set()
     if previous:
         old, new = _sheet(previous), _sheet(row)
         changed = changed_fact_keys(old, new)
-        revs = await fetch_all(
-            conn,
-            """select a.id as asset_id, r.fact_keys from assets a
-               join asset_revisions r on r.asset_id = a.id and r.n = a.current_revision
-               where a.campaign_id = %s and a.status not in ('retired', 'rejected')""",
-            (campaign["id"],),
-        )
-        stale = affected_assets(revs, changed, all_if=forbidden_changed(old, new))
+        plan = change_plan(await revisions_for_change(conn, campaign["id"]), changed,
+                           all_if=forbidden_changed(old, new))
+        stale = plan["rewrite"]
         if stale:
             await conn.execute(
                 "update assets set status = 'stale', updated_at = now() where id = any(%s::uuid[])", (stale,)
             )
+        for asset_id in plan["refill"]:  # deterministic: same words, offer box filled from the new version
+            asset = await get_asset(conn, asset_id)
+            rev = await current_revision(conn, asset_id)
+            assert rev
+            await add_revision(conn, asset, AssetContent.model_validate(rev["content"]), created_by="agent",
+                               reason=f"Offer v{row['version']}: refilled the offer box", features=rev["features"],
+                               verifier_available=verifier_available)
+            refilled.append(asset_id)
     summary = f"Locked offer facts v{row['version']}"
     if previous:
-        summary += f": {', '.join(sorted(changed)) or 'no fact'} changed, {len(stale)} asset(s) need an update"
+        summary += (f": {', '.join(sorted(changed)) or 'no fact'} changed; {len(stale)} post(s) to rewrite, "
+                    f"{len(refilled)} refilled from the new offer")
     await ledger.record(conn, campaign["business_id"], "facts.locked", summary, actor=actor,
                         campaign_id=campaign["id"],
-                        payload={"version": row["version"], "changed": sorted(changed), "stale_assets": stale})
-    return {"facts": row, "changed": sorted(changed), "stale_assets": stale}
+                        payload={"version": row["version"], "changed": sorted(changed), "stale_assets": stale,
+                                 "refilled": refilled})
+    return {"facts": row, "changed": sorted(changed), "stale_assets": stale, "refilled": refilled}
+
+
+async def revisions_for_change(conn: Conn, campaign_id: UUID | str) -> list[dict[str, Any]]:
+    """Each live-or-in-progress post's facts on show and the slots in its own written text."""
+    rows = await fetch_all(
+        conn,
+        """select a.id as asset_id, a.status, a.segment, a.channel, a.language, r.fact_keys, r.content from assets a
+           join asset_revisions r on r.asset_id = a.id and r.n = a.current_revision
+           where a.campaign_id = %s and a.status not in ('retired', 'rejected')""",
+        (campaign_id,),
+    )
+    return [{**r, "asset_id": str(r["asset_id"]),
+             "written_keys": slot_keys(AssetContent.model_validate(r["content"]))} for r in rows]
 
 
 # ------------------------------------------------------------------ assets
@@ -419,6 +442,8 @@ async def audit_assets(router: ModelRouter, conn_factory: Any, asset_ids: list[s
                 ("valid" if v["passed"] else "invalid", r["asset_id"]),
             )
             results[ref] = {"passed": v["passed"], "l3": v["l3"]}
+            if not v["passed"]:  # the Checker's reasons, for the Orchestrator and the owner's team feed
+                results[ref]["why"] = [c["detail"] for c in v["checks"] if not c["passed"] and c["severity"] == "block"][:3]
         await ledger.record(conn, campaign["business_id"], "assets.audited",
                             f"Semantic audit: {sum(x['passed'] for x in results.values())}/{len(results)} passed"
                             if not l3_failed else "Semantic audit unavailable; assets stay pending",
@@ -535,11 +560,13 @@ async def find_code(conn: Conn, code: str) -> dict[str, Any]:
     code = code.strip().upper()
     row = await fetch_one(
         conn, """select 'claim' as kind, cl.code, cl.touchpoint_code, cl.campaign_id, cl.asset_id, cl.status,
-                        cl.redeemed_at, cl.bill_amount, c.business_id
+                        cl.redeemed_at, cl.bill_amount, c.business_id, cl.kind as claim_kind, cl.valid_from,
+                        cl.valid_until
                  from claims cl join campaigns c on c.id = cl.campaign_id where cl.code = %s""", (code,))
     row = row or await fetch_one(
         conn, """select 'post' as kind, t.code, t.code as touchpoint_code, t.campaign_id, t.asset_id,
-                        null as status, null as redeemed_at, null as bill_amount, c.business_id
+                        null as status, null as redeemed_at, null as bill_amount, c.business_id,
+                        null as claim_kind, null::date as valid_from, null::date as valid_until
                  from touchpoints t join campaigns c on c.id = t.campaign_id where t.code = %s""", (code,))
     if not row:
         raise NotFound("No offer has this code. Check the letters.")
@@ -559,9 +586,18 @@ async def counter_check(conn: Conn, code: str) -> dict[str, Any]:
     post = await fetch_one(conn, """select a.channel, a.language, r.rendered->>'headline' as headline
                                     from assets a join asset_revisions r on r.asset_id = a.id and r.n = a.current_revision
                                     where a.id = %s""", (it["asset_id"],)) if it["asset_id"] else None
+    come_back = it["claim_kind"] == "return"
+    if come_back:  # a second visit: the same offer rules, but its own dates instead of the campaign's
+        rules = dataclasses.replace(rules, start=None, end=None)
+        allowed, why = redeem.evaluate(rules, now)
+        if now.date() < it["valid_from"]:
+            allowed, why = False, f"This come-back code works from {it['valid_from']:%A %-d %B}."
+        elif now.date() > it["valid_until"]:
+            allowed, why = False, f"This come-back code expired on {it['valid_until']:%A %-d %B}."
+        rules.start, rules.end = it["valid_from"], it["valid_until"]
     if it["kind"] == "claim" and it["status"] == "redeemed":
         verdict, reason = "used", f"Already used on {it['redeemed_at'].astimezone(now.tzinfo).strftime('%a %-d %b, %-I:%M %p')}."
-    elif campaign["status"] in ("concluded", "archived"):
+    elif campaign["status"] == "archived" or (campaign["status"] == "concluded" and not come_back):
         verdict, reason = "not_valid", "This campaign has ended."
     elif not allowed:
         verdict, reason = "not_valid", why
@@ -574,8 +610,8 @@ async def counter_check(conn: Conn, code: str) -> dict[str, Any]:
             "business": {"name": business["name"], "slug": business["slug"]},
             "campaign": {"id": str(campaign["id"]), "name": campaign["name"]},
             "offer": [f["display"].get("en") for f in facts if f["type"] != "condition" and f["display"].get("en")],
-            "checks": rules.checks, "when": rules.describe(), "post": post,
-            "redeemed_at": it["redeemed_at"], "bill_amount": it["bill_amount"]}
+            "checks": rules.checks, "when": rules.describe(), "post": post, "come_back": come_back,
+            "redeemed_at": it["redeemed_at"], "bill_amount": it["bill_amount"], "local_date": now.date().isoformat()}
 
 
 async def counter_redeem(conn: Conn, code: str, *, by: str, bill_amount: float | None = None,
@@ -597,9 +633,36 @@ async def counter_redeem(conn: Conn, code: str, *, by: str, bill_amount: float |
     else:
         post_code, via = chk["code"], None
     meta = {"claim": chk["code"] if chk["kind"] == "claim" else None, "bill_amount": bill_amount, "by": by,
-            "outside_rules": outside_rules if chk["verdict"] == "not_valid" else None}
+            "outside_rules": outside_rules if chk["verdict"] == "not_valid" else None,
+            "return": True if chk["come_back"] else None}
     await record_outcome(conn, post_code, "redeem", source="counter", meta={k: v for k, v in meta.items() if v is not None})
-    return {**chk, "verdict": "redeemed", "bill_amount": bill_amount, "via": via}
+    out = {**chk, "verdict": "redeemed", "bill_amount": bill_amount, "via": via}
+    if chk["kind"] == "claim" and not chk["come_back"]:
+        out["return_code"] = await issue_return_code(conn, chk["code"], date.fromisoformat(chk["local_date"]))
+    return out
+
+
+async def issue_return_code(conn: Conn, code: str, today: date) -> dict[str, Any] | None:
+    """A come-back code for a customer whose code was just used, when the campaign has them on. Same post (so the
+    second visit is attributed to it), valid from tomorrow for the campaign's return_days. One per first code."""
+    first = await fetch_one(conn, """select cl.*, c.return_days from claims cl join campaigns c on c.id = cl.campaign_id
+                                     where cl.code = %s and cl.kind = 'first'""", (code,))
+    if not first or not first["return_days"]:
+        return None
+    if existing := await fetch_one(conn, "select code, valid_from, valid_until from claims where parent_code = %s", (code,)):
+        return existing
+    start, end = today + timedelta(days=1), today + timedelta(days=first["return_days"])
+    for _ in range(5):
+        new = "".join(secrets.choice(_ALPHABET) for _ in range(CLAIM_LEN))
+        row = await fetch_one(
+            conn, """insert into claims (code, touchpoint_code, campaign_id, asset_id, via, kind, parent_code, valid_from,
+                                         valid_until)
+                     values (%s, %s, %s, %s, %s, 'return', %s, %s, %s) on conflict do nothing
+                     returning code, valid_from, valid_until""",
+            (new, first["touchpoint_code"], first["campaign_id"], first["asset_id"], first["via"], code, start, end))
+        if row:
+            return row
+    return None
 
 
 def whatsapp_number(number: str | None) -> str | None:

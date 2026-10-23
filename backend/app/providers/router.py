@@ -8,6 +8,7 @@ import json
 import re
 import time
 from collections import deque
+from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
@@ -115,6 +116,7 @@ class ModelRouter:
         self._breakers: dict[str, _Breaker] = {}
         self._rest_until: dict[str, float] = {}
         self.calls: deque[CallRecord] = deque(maxlen=300)
+        self.on_call: Callable[[CallRecord], None] | None = None  # e.g. keep the call in the database
 
     # ------------------------------------------------------------- helpers
     def _chain(self, role: str, pool: dict[str, Any]) -> list[Any]:
@@ -138,9 +140,12 @@ class ModelRouter:
     def _log(self, role: str, provider: str, model: str, started: float, *, ok: bool, replayed: bool = False,
              tin: int = 0, tout: int = 0, cost: float = 0.0, error: str | None = None) -> None:
         tags = _scope.get() or {}
-        self.calls.append(CallRecord(time.time(), role, provider, model, ok, replayed, tin, tout, cost,
-                                     int((time.monotonic() - started) * 1000), error, tags.get("business_id"),
-                                     tags.get("campaign_id"), tags.get("task"), tags.get("agent")))
+        rec = CallRecord(time.time(), role, provider, model, ok, replayed, tin, tout, cost,
+                         int((time.monotonic() - started) * 1000), error, tags.get("business_id"),
+                         tags.get("campaign_id"), tags.get("task"), tags.get("agent"))
+        self.calls.append(rec)
+        if self.on_call is not None:
+            self.on_call(rec)
 
     # ------------------------------------------------------------- chat
     async def chat(self, role: str, messages: list[dict[str, Any]], **kw: Any) -> ChatResult:

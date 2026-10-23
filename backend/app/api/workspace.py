@@ -5,16 +5,21 @@ import base64
 import binascii
 import re
 import secrets
+from datetime import date
 from typing import Any, Literal
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, Request
 from pydantic import BaseModel, Field
 
-from app import auth, autofill, ledger, photos, reviews, sarvam, services
+from app import auth, autofill, ledger, photos, reviews, sarvam, services, usage
+from app import moments as moments_mod
+from app import results as results_mod
 from app.api.deps import get_router, require_owner
 from app.auth import CurrentUser, business_for, require_member
 from app.config import get_settings
 from app.db import connection, fetch_all, fetch_one, jsonb
+from app.domain import economics, effort
 from app.domain.facts import AI_CLICHES, machine_voice
 from app.storage import get_storage
 
@@ -320,6 +325,46 @@ async def speech(user: CurrentUser, slug: str, body: Speech) -> dict[str, Any]:
         raise services.Conflict(str(e)) from e
 
 
+class SpokenMenu(BaseModel):
+    data_url: str | None = Field(None, max_length=5_000_000, description="data:audio/...;base64,... (Sarvam)")
+    text: str | None = Field(None, max_length=4000, description="Already transcribed by the browser")
+    language: Literal["en", "kn", "hi"] | None = None
+
+
+@accounts.post("/onboarding/menu-speech")
+async def menu_speech(user: CurrentUser, body: SpokenMenu, request: Request) -> dict[str, Any]:
+    """The owner says their menu and prices (Kannada, Hindi or English); the items fill the sign-up form. Nothing
+    is saved until they confirm, and prices that were not clearly heard are marked for checking."""
+    language = body.language
+    if body.data_url:
+        if not sarvam.available():
+            raise services.Conflict("Voice through Sarvam is not set up; type the menu instead.")
+        m = re.match(r"^data:(audio/[\w.+-]+)(?:;[^,]*)?;base64,(.+)$", body.data_url, re.S)
+        try:
+            audio = base64.b64decode(m.group(2), validate=True) if m else b""
+        except (binascii.Error, ValueError):
+            audio = b""
+        if not m or not audio:
+            raise services.Conflict("That recording could not be read.")
+        try:
+            heard = await sarvam.transcribe(audio, m.group(1), language)
+        except sarvam.SarvamError as e:
+            raise services.Conflict(str(e)) from e
+        said, language = heard["transcript"], heard["language"] or language
+    else:
+        said = (body.text or "").strip()
+    if not said:
+        raise services.Conflict("Nothing was heard. Try again a little closer to the phone.")
+    english = await sarvam.to_english(said, language or "") if language in ("kn", "hi") else said
+    from app.providers.base import ProviderError
+
+    try:
+        items = await autofill.menu_from_speech(get_router(request), said, language or "en", english)
+    except ProviderError as e:
+        raise services.Conflict(f"Could not read the menu right now ({str(e)[:120]}). Try again soon.") from e
+    return {"said": said, "language": language, "english": english, "items": items}
+
+
 # ------------------------------------------------------------------ customer reviews
 
 
@@ -381,23 +426,171 @@ async def set_asset_photo(user: CurrentUser, asset_id: str, body: PhotoChoice) -
     return {"ok": True, "image_url": get_storage().url(p["image_key"])}
 
 
+# ------------------------------------------------------------------ photo reels
+
+
+@accounts.post("/assets/{asset_id}/reel")
+async def reel(user: CurrentUser, asset_id: str) -> dict[str, Any]:
+    """A short vertical video for a post: the business's own photos with a voice-over (Sarvam) that reads only the
+    post's checked words and the locked offer. The browser turns it into a video; no AI pictures are used."""
+    async with connection() as conn:
+        asset = await services.get_asset(conn, asset_id)
+        c = await services.get_campaign(conn, asset["campaign_id"])
+        await require_member(conn, user, c["business_id"])
+        rev = (await services.current_revision(conn, asset_id)) or {}
+        r = rev.get("rendered") or {}
+        tp = await fetch_one(conn, "select code from touchpoints where asset_id = %s", (asset_id,))
+        lib = await fetch_all(conn, """select * from business_photos where business_id = %s and status = 'active'
+                                       and coalesce(kind, 'other') <> all(%s)""", (c["business_id"], ["menu_or_text", "logo"]))
+    concept = " ".join([r.get("headline", ""), r.get("body", ""), *(r.get("offer") or [])])
+    own = [p for p in lib if p["image_key"] == rev.get("image_key")]
+    rest = sorted((p for p in lib if p not in own), key=lambda p: -photos.score(p, concept, 0))
+    shots = (own + rest)[:5]
+    if not shots:
+        raise services.Conflict("Add a few photos of your business first (Photos page). Reels use only your own photos.")
+    lines = [x for x in [r.get("headline"), r.get("body"), *(r.get("offer") or []), r.get("cta")] if x]
+    script = " ".join(x.strip() + ("" if x.strip()[-1:] in ".!?।" else ".") for x in lines)
+    voice, why = None, None
+    if sarvam.available():
+        try:
+            voice = get_storage().url(await sarvam.speak(script, asset["language"]))
+        except (sarvam.SarvamError, httpx.HTTPError) as e:
+            why = f"No voice-over this time: {e}"
+    else:
+        why = "No voice-over: Sarvam is not set up, so the reel has captions only."
+    storage = get_storage()
+    return {"language": asset["language"], "script": script, "voice_url": voice, "voice_note": why,
+            "voice": get_settings().sarvam_tts_model if voice else None,
+            "headline": r.get("headline"), "offer": r.get("offer") or [], "cta": r.get("cta"),
+            "code": tp and tp["code"],
+            "photos": [{"url": storage.url(p["image_key"]), "caption": p.get("caption"),
+                        "attribution": p.get("attribution"), "source": p.get("source")} for p in shots]}
+
+
 # ------------------------------------------------------------------ what the agents are doing
 
 
 AGENTS = [
-    {"role": "reasoning", "name": "Orchestrator", "job": "Reads the situation and runs the team: drafts the offer, "
-     "checks margins, plans audiences and channels, hands writing to the Writer and checking to the Checker, and "
-     "asks you for approvals."},
-    {"role": "generation", "name": "Writer", "job": "Takes writing work from the Orchestrator and writes each post's "
+    {"role": "reasoning", "agent": "orchestrator", "name": "Orchestrator", "job": "Reads the situation and runs the "
+     "team: hands the offer to the Offer agent, plans audiences and channels, hands writing to the Writer and "
+     "checking to the Checker, and asks you for approvals."},
+    {"role": "reasoning", "agent": "brief", "name": "Brief agent", "job": "Before anything is written, settles who "
+     "the campaign is for, what it should achieve (a number), and which channels and languages to use, from what "
+     "worked before and what you have connected. Asks you only when it cannot tell."},
+    {"role": "reasoning", "agent": "offer", "name": "Offer agent", "job": "Turns your idea into exact offer details "
+     "from your real menu, checks the margin, and asks you short questions about anything a customer would have to "
+     "guess. Never locks the offer; you do."},
+    {"role": "reasoning", "agent": "change", "name": "Change agent", "job": "When you change a running offer, shows "
+     "which posts must be rewritten and which only get the new offer box, then drafts the new version for you to "
+     "lock. Posts the change does not touch stay as they are."},
+    {"role": "generation", "agent": "language", "name": "Language agent", "job": "Writes every offer detail in "
+     "Kannada and Hindi with Sarvam, an Indian-language model, and replaces any wording that names a different day "
+     "or number from the English. Each one is read back into English by another model."},
+    {"role": "generation", "agent": "writer", "name": "Writer", "job": "Takes writing work from the Orchestrator and writes each post's "
      "headline and message in its language, in your brand voice. Never types offer details; the system adds those "
      "from the locked offer."},
     {"role": "verification", "name": "Checker", "job": "A different model from the Writer. Reads every post and "
      "translation back into English and blocks anything that does not match the locked offer. Never edits."},
+    {"role": "verification", "agent": "analyst", "name": "Analyst", "job": "Once posts are live, reads who opened, "
+     "claimed and came to the counter, and the A/B tests, then suggests the next move for you to say yes or no to. "
+     "Every number it quotes is checked against the real results."},
+    {"role": "reasoning", "agent": "listener", "name": "Customer listener", "job": "Reads reviews, comments and "
+     "visit ratings, tells you about problems several customers raise (in their own words), drafts replies for "
+     "you to send, and suggests a follow-up campaign when one fits."},
+    {"role": "reasoning", "agent": "scout", "name": "Scout", "job": "Watches what is happening around you (rain "
+     "this evening, the weekend, salary week, a match or fest you add) and suggests campaigns that fit it, using only "
+     "your real menu. You pick one to start."},
     {"role": "vision", "name": "Photo reader", "job": "Looks at the photos of your business once, describes them, "
      "and sets aside blurry shots, logos and menus so each post gets a fitting real photo."},
     {"role": "image", "name": "Picture maker", "job": "Only when you have no photos yet: makes an AI picture, "
      "labelled as such."},
 ]
+
+
+# ------------------------------------------------------------------ what is happening around the business
+
+
+@accounts.get("/businesses/{slug}/moments")
+async def list_moments(user: CurrentUser, slug: str) -> dict[str, Any]:
+    async with connection() as conn:
+        b = await business_for(conn, user, slug)
+        rows = await moments_mod.event_rows(conn, b["id"])
+    weather = await moments_mod.forecast(b["city"])  # network call outside the transaction
+    return {"moments": moments_mod.combine(rows, weather, date.today())}
+
+
+class MomentIn(BaseModel):
+    name: str = Field(min_length=3, max_length=80, description="e.g. 'IPL: RCB vs CSK' or 'College fest at BMS'")
+    starts_on: date
+    ends_on: date | None = None
+    note: str | None = Field(None, max_length=120, description="e.g. '7:30 pm, on the big screens nearby'")
+
+
+@accounts.post("/businesses/{slug}/moments")
+async def add_moment(user: CurrentUser, slug: str, body: MomentIn) -> dict[str, Any]:
+    """Something the owner knows is happening nearby. Stored as one of the business's events."""
+    if body.ends_on and body.ends_on < body.starts_on:
+        raise services.Conflict("It ends before it starts.")
+    key = "own-" + re.sub(r"[^a-z0-9]+", "-", body.name.casefold()).strip("-")[:40]
+    async with connection() as conn:
+        b = await business_for(conn, user, slug)
+        await conn.execute(
+            """insert into customer_insights (business_id, kind, key, period_start, period_end, data)
+               values (%s, 'event', %s, %s, %s, %s)
+               on conflict (business_id, kind, key, period_start) do update set period_end = excluded.period_end,
+                   data = excluded.data""",
+            (b["id"], key, body.starts_on, body.ends_on or body.starts_on,
+             jsonb({"name": body.name, "note": body.note, "added_by": "owner"})))
+        await ledger.record(conn, b["id"], "moment.added", f"Added: {body.name} ({body.starts_on:%-d %b})", actor="owner")
+    return {"key": f"event-{key}"}
+
+
+@accounts.delete("/businesses/{slug}/moments/{key}")
+async def remove_moment(user: CurrentUser, slug: str, key: str) -> dict[str, Any]:
+    async with connection() as conn:
+        b = await business_for(conn, user, slug)
+        cur = await conn.execute(
+            """delete from customer_insights where business_id = %s and kind = 'event' and key = %s
+               and data->>'added_by' = 'owner'""", (b["id"], key.removeprefix("event-")))
+    if not cur.rowcount:
+        raise services.NotFound("moment not found")
+    return {"ok": True}
+
+
+@accounts.post("/businesses/{slug}/opportunities")
+async def opportunities(user: CurrentUser, slug: str, request: Request) -> dict[str, Any]:
+    """The Scout agent's campaign ideas for what is happening now."""
+    from app.agent import situation
+    from app.providers.base import ProviderError
+
+    async with connection() as conn:
+        b = await business_for(conn, user, slug)
+        rows = await moments_mod.event_rows(conn, b["id"])
+        themes = await situation.theme_trends(conn, b["id"])
+    found = moments_mod.combine(rows, await moments_mod.forecast(b["city"]), date.today())
+    if not found:
+        return {"ideas": [], "moments": []}
+    try:
+        ideas = await moments_mod.scout(get_router(request), b, found, themes)
+    except ProviderError as e:  # includes no model available
+        raise services.Conflict(f"The Scout could not reach a model right now ({str(e)[:120]}). Try again soon.") from e
+    async with connection() as conn:
+        await ledger.record(conn, b["id"], "scout.ideas",
+                            f"Scout: {len(ideas)} idea(s) for what is happening: "
+                            + "; ".join(f"{i['title']} ({i['moment']['title']})" for i in ideas),
+                            actor="agent", payload={"agent": "scout", "ideas": ideas})
+    return {"ideas": ideas, "moments": found}
+
+
+@accounts.get("/businesses/{slug}/checker-test")
+async def checker_test(user: CurrentUser, slug: str) -> dict[str, Any]:
+    """How the checks did on 50 known-bad drafts and 10 good ones: the last saved run (scripts.checker_eval), or a
+    rules-only run now if none was saved."""
+    from app import checker_eval
+
+    async with connection() as conn:
+        await business_for(conn, user, slug)
+    return checker_eval.saved() or await checker_eval.run(None)
 
 
 @accounts.get("/businesses/{slug}/agents")
@@ -411,8 +604,12 @@ async def agents(user: CurrentUser, slug: str, request: Request) -> dict[str, An
     status = router.status()
     calls = router.calls_for(str(b["id"]))
     out = []
+    tagged = {(a["role"], a["agent"]) for a in AGENTS if "agent" in a}
     for a in AGENTS:
-        mine = [c for c in calls if c["role"] == a["role"]]
+        # Agents sharing a model role (Orchestrator, Offer agent) are told apart by the agent tag on each call; an
+        # entry without a tag (Checker, Photo reader) gets the rest of its role's calls.
+        mine = [c for c in calls if c["role"] == a["role"] and (
+            c.get("agent") == a["agent"] if "agent" in a else (a["role"], c.get("agent")) not in tagged)]
         out.append({**a, "models": status["roles"].get(a["role"], []), "calls": len(mine),
                     "last": mine[-1] if mine else None})
     return {"agents": out, "calls": calls[::-1][:40], "activity": recent}
@@ -431,7 +628,10 @@ async def results(user: CurrentUser, slug: str) -> dict[str, Any]:
                             a.segment, a.variant, t.code,
                             coalesce(sum(o.qty) filter (where o.type = 'scan'), 0)::int as scans,
                             coalesce(sum(o.qty) filter (where o.type = 'click'), 0)::int as claims,
-                            coalesce(sum(o.qty) filter (where o.type = 'redeem'), 0)::int as redeemed,
+                            coalesce(sum(o.qty) filter (where o.type = 'redeem'
+                                     and not coalesce((o.meta->>'return')::boolean, false)), 0)::int as redeemed,
+                            coalesce(sum(o.qty) filter (where o.type = 'redeem'
+                                     and coalesce((o.meta->>'return')::boolean, false)), 0)::int as came_back,
                             coalesce(sum((o.meta->>'bill_amount')::numeric) filter (where o.type = 'redeem'), 0)::float
                               as sales,
                             coalesce(sum(o.qty) filter (where o.source = 'simulated'), 0)::int as simulated
@@ -443,6 +643,12 @@ async def results(user: CurrentUser, slug: str) -> dict[str, Any]:
     for r in rows:
         r["link"] = f"{base}/r/{r['code']}"
         r["conversion"] = round(r["redeemed"] / r["scans"], 4) if r["scans"] else None
-    totals = {k: sum(r[k] for r in rows) for k in ("scans", "claims", "redeemed", "sales", "simulated")}
+    totals = {k: sum(r[k] for r in rows) for k in ("scans", "claims", "redeemed", "came_back", "sales", "simulated")}
     totals["conversion"] = round(totals["redeemed"] / totals["scans"], 4) if totals["scans"] else None
-    return {"posts": rows, "totals": totals}
+    async with connection() as conn:
+        spent = await usage.spent(conn, business_id=b["id"])
+        live = {r["campaign_id"] for r in rows}
+        efforts = [await results_mod.effort_for(conn, cid) for cid in live]
+    return {"posts": rows, "totals": totals,
+            "ai": {**spent, **economics.return_on_ai(spent["rupees"], totals["sales"], totals["redeemed"])},
+            "effort": effort.typical([e for e in efforts if e])}

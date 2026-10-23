@@ -4,6 +4,8 @@ import { ArrowRight, Check, Copy, CursorClick, DeviceMobile, DownloadSimple, Ins
 import clsx from "clsx";
 import Link from "next/link";
 import { useState } from "react";
+import { BillImport } from "@/components/bill-import";
+import { CostLine } from "@/components/effort-cost";
 import { CountUp, Reveal } from "@/components/motion";
 import { Shell } from "@/components/shell";
 import { CHANNEL_LABEL, Empty, LANG_LABEL, PageHeader, SectionHeading, segmentLabel, Skeleton, stagger } from "@/components/ui";
@@ -87,7 +89,7 @@ function PostRow({ r, best, i }: { r: ResultRow; best: boolean; i: number }) {
 
 export default function ResultsPage() {
   const business = useBusiness();
-  const { data } = useResource<Results>(`/businesses/${business.slug}/results`, (e) => e.type.startsWith("outcome.") || e.type === "assets.published");
+  const { data, reload } = useResource<Results>(`/businesses/${business.slug}/results`, (e) => e.type.startsWith("outcome.") || e.type === "assets.published" || e.type === "bills.imported");
   const groups = new Map<string, ResultRow[]>();
   for (const r of data?.posts ?? []) groups.set(r.campaign_id, [...(groups.get(r.campaign_id) ?? []), r]);
   const t = data?.totals;
@@ -126,12 +128,32 @@ export default function ResultsPage() {
             </div>
             {t && t.sales > 0 && (
               <p className="mt-3 text-[15px] text-ink-2">
-                <span className="font-semibold text-ink">₹{t.sales.toLocaleString("en-IN")}</span> in sales came with redeemed codes, from the bills staff typed in at the counter.
+                <span className="font-semibold text-ink">₹{t.sales.toLocaleString("en-IN")}</span> in sales came with redeemed codes, from bills typed at the counter or matched from your payment statement.
+              </p>
+            )}
+            {data.ai && (
+              <div className="mt-3">
+                <CostLine ai={data.ai} />
+              </div>
+            )}
+            {data.effort && (
+              <p className="mt-2 text-[15px] text-ink-2">
+                A campaign takes you a typical <b className="text-ink">{data.effort.taps} taps</b> and {Math.round(data.effort.minutes)} minutes from brief to live posts
+                {data.effort.waiting_minutes >= 1 && <span className="text-muted">, {Math.round(data.effort.waiting_minutes)} of them waiting for your answers</span>} ({data.effort.campaigns} campaign{data.effort.campaigns === 1 ? "" : "s"}).
+              </p>
+            )}
+            {t && t.came_back > 0 && (
+              <p className="mt-2 text-[15px] text-ink-2">
+                <span className="font-semibold text-ink">{t.came_back}</span> customers came back for a second visit with a come-back code.
               </p>
             )}
             {t && t.redeemed > t.scans && (
               <p className="mt-3 text-[13px] text-muted">Some codes were redeemed from printed posters or forwarded messages without opening the link, so redemptions can be higher than visits.</p>
             )}
+          </section>
+
+          <section className="mt-10" aria-label="Match your sales">
+            <BillImport slug={business.slug} onSaved={reload} />
           </section>
 
           <Reveal as="section" className="mt-14">

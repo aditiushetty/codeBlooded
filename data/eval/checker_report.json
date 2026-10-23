@@ -1,0 +1,99 @@
+{
+ "ran_at": 1792784783,
+ "live": true,
+ "model": "gemini-3.1-flash-lite",
+ "caught": 49,
+ "bad_total": 50,
+ "false_alarms": 0,
+ "good_total": 10,
+ "by_layer": {
+  "rules": 39,
+  "meaning check": 10
+ },
+ "by_category": {
+  "wrong_price": {
+   "total": 7,
+   "caught": 7
+  },
+  "invented_date": {
+   "total": 2,
+   "caught": 2
+  },
+  "invented_time": {
+   "total": 1,
+   "caught": 1
+  },
+  "invented_offer": {
+   "total": 2,
+   "caught": 2
+  },
+  "invented_history": {
+   "total": 1,
+   "caught": 1
+  },
+  "broken_script": {
+   "total": 5,
+   "caught": 5
+  },
+  "forbidden_claim": {
+   "total": 10,
+   "caught": 10
+  },
+  "machine_voice": {
+   "total": 3,
+   "caught": 3
+  },
+  "unknown_fact": {
+   "total": 2,
+   "caught": 2
+  },
+  "too_long": {
+   "total": 1,
+   "caught": 1
+  },
+  "wrong_time": {
+   "total": 6,
+   "caught": 6
+  },
+  "implied_free": {
+   "total": 1,
+   "caught": 1
+  },
+  "wrong_days": {
+   "total": 2,
+   "caught": 2
+  },
+  "wrong_scope": {
+   "total": 2,
+   "caught": 2
+  },
+  "wrong_item": {
+   "total": 2,
+   "caught": 2
+  },
+  "contradicts_condition": {
+   "total": 1,
+   "caught": 1
+  },
+  "invented_service": {
+   "total": 1,
+   "caught": 0
+  },
+  "wrong_dates": {
+   "total": 1,
+   "caught": 1
+  }
+ },
+ "no_verdict": [],
+ "missed": [
+  {
+   "id": 47,
+   "category": "invented_service",
+   "language": "en",
+   "headline": "Parcels packed in two minutes",
+   "why_bad": "Promises fast takeaway packing."
+  }
+ ],
+ "wrongly_blocked": [],
+ "note": null
+}

@@ -123,8 +123,9 @@ class WordingResult(BaseModel):
 
 WORDING_SYSTEM = """You check the translated wording of a small business's offer before the owner locks it.
 For each item, translate `wording` into plain, literal English. Then decide whether it means exactly the same
-as `english` (and `value`). Any difference a customer could act on is a mismatch: days, dates, times, amounts,
-items, who qualifies, conditions. Ignore style, word order and politeness. Be strict.
+as `english`. Any difference a customer could act on is a mismatch: days, dates, times, time of day (3 pm is
+afternoon, not evening), amounts, items, who qualifies, conditions. Ignore style, word order and politeness.
+Be strict. Never report a detail that `english` itself leaves out: each detail of the offer is its own item.
 Some items carry `independent_translation`, made by a separate translation system. Use it as a second reading:
 if it differs from `english` in anything a customer could act on, that is a mismatch.
 Reply with JSON: {"checks": [{"key", "language", "back_translation", "same_meaning", "issue"}]}.
@@ -134,7 +135,9 @@ Reply with JSON: {"checks": [{"key", "language", "back_translation", "same_meani
 async def audit_fact_wording(router: ModelRouter, sheet: FactSheet) -> tuple[list[dict[str, str]], dict[str, dict]]:
     """Back-translate every non-English fact wording -> (issues, back-translations by key and language)."""
     labels = {f.key: f.label for f in sheet.facts}
-    items = [{"key": f.key, "language": lang, "wording": text, "english": f.display.get("en"), "value": f.value}
+    # No `value`: the job is translation against the English. Given the raw dates, models flagged a days wording
+    # for "not specifying the start date" when the English did not either (live, 2026-10-23).
+    items = [{"key": f.key, "language": lang, "wording": text, "english": f.display.get("en")}
              for f in sheet.facts for lang, text in f.display.items() if lang != "en"]
     if not items:
         return [], {}

@@ -1,0 +1,677 @@
+{
+ "_note": "Known-bad drafts for the Checker test (TODO #8). Each is a post the team must never publish against this locked offer. 'good' ones are controls: a sound check passes them.",
+ "facts": [
+  {
+   "key": "discount",
+   "label": "Discount",
+   "type": "percent",
+   "value": 15,
+   "display": {
+    "en": "15% off",
+    "kn": "15% ರಿಯಾಯಿತಿ",
+    "hi": "15% छूट"
+   }
+  },
+  {
+   "key": "combo",
+   "label": "Combo",
+   "type": "item",
+   "value": [
+    "Filter coffee",
+    "Masala vada"
+   ],
+   "display": {
+    "en": "filter coffee + masala vada",
+    "kn": "ಫಿಲ್ಟರ್ ಕಾಫಿ + ಮಸಾಲೆ ವಡೆ",
+    "hi": "फ़िल्टर कॉफ़ी + मसाला वड़ा"
+   }
+  },
+  {
+   "key": "hours",
+   "label": "Hours",
+   "type": "time_range",
+   "value": "16:00-19:00",
+   "display": {
+    "en": "weekdays, 4 to 7 pm",
+    "kn": "ವಾರದ ದಿನಗಳು, ಸಂಜೆ 4 ರಿಂದ 7",
+    "hi": "सोमवार से शुक्रवार, शाम 4 से 7 बजे"
+   }
+  },
+  {
+   "key": "dates",
+   "label": "Dates",
+   "type": "date_range",
+   "value": [
+    "2026-10-26",
+    "2026-11-06"
+   ],
+   "display": {
+    "en": "26 Oct to 6 Nov",
+    "kn": "ಅಕ್ಟೋಬರ್ 26 ರಿಂದ ನವೆಂಬರ್ 6",
+    "hi": "26 अक्टूबर से 6 नवंबर"
+   }
+  },
+  {
+   "key": "students",
+   "label": "Who",
+   "type": "condition",
+   "value": true,
+   "display": {
+    "en": "with a college ID",
+    "kn": "ಕಾಲೇಜು ಐಡಿ ತೋರಿಸಿದರೆ",
+    "hi": "कॉलेज आईडी दिखाने पर"
+   }
+  }
+ ],
+ "forbidden_claims": {
+  "en": [
+   "all week"
+  ]
+ },
+ "bad": [
+  {
+   "id": 1,
+   "category": "wrong_price",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Only ₹49 for the combo",
+   "body": "Kaapi and vada after class.",
+   "hashtags": [],
+   "why_bad": "Invents a price."
+  },
+  {
+   "id": 2,
+   "category": "wrong_price",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "20% off this week",
+   "body": "Strong kaapi, crisp vada.",
+   "hashtags": [],
+   "why_bad": "Says 20% instead of 15%."
+  },
+  {
+   "id": 3,
+   "category": "invented_date",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Offer till 31 October",
+   "body": "Come by after class.",
+   "hashtags": [],
+   "why_bad": "Invents an end date."
+  },
+  {
+   "id": 4,
+   "category": "invented_time",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Open till 10 pm for students",
+   "body": "Kaapi and vada after class.",
+   "hashtags": [],
+   "why_bad": "Invents hours."
+  },
+  {
+   "id": 5,
+   "category": "wrong_price",
+   "language": "kn",
+   "channel": "instagram_post",
+   "headline": "ಕೇವಲ ₹49ಕ್ಕೆ ಕಾಫಿ",
+   "body": "ಓದಿನ ನಡುವೆ ಒಂದು ಬ್ರೇಕ್.",
+   "hashtags": [],
+   "why_bad": "Invents a price in Kannada."
+  },
+  {
+   "id": 6,
+   "category": "wrong_price",
+   "language": "hi",
+   "channel": "instagram_post",
+   "headline": "सिर्फ़ ₹49 में कॉफ़ी",
+   "body": "पढ़ाई के बीच एक ब्रेक।",
+   "hashtags": [],
+   "why_bad": "Invents a price in Hindi."
+  },
+  {
+   "id": 7,
+   "category": "wrong_price",
+   "language": "kn",
+   "channel": "instagram_post",
+   "headline": "೨೦% ರಿಯಾಯಿತಿ ಈ ವಾರ",
+   "body": "ಗಟ್ಟಿ ಕಾಫಿ, ಬಿಸಿ ವಡೆ.",
+   "hashtags": [],
+   "why_bad": "20% written in Kannada digits."
+  },
+  {
+   "id": 8,
+   "category": "wrong_price",
+   "language": "hi",
+   "channel": "instagram_post",
+   "headline": "२५% छूट इस हफ़्ते",
+   "body": "कड़क कॉफ़ी, गरम वड़ा।",
+   "hashtags": [],
+   "why_bad": "25% written in Devanagari digits."
+  },
+  {
+   "id": 9,
+   "category": "invented_offer",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Buy 2, get 1",
+   "body": "Bring a friend after class.",
+   "hashtags": [],
+   "why_bad": "Invents a buy-two offer."
+  },
+  {
+   "id": 10,
+   "category": "invented_date",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Exam break",
+   "body": "Kaapi and vada after class.",
+   "hashtags": [
+    "exam2026"
+   ],
+   "why_bad": "Year inside a hashtag."
+  },
+  {
+   "id": 11,
+   "category": "invented_history",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Since 1998, the same kaapi",
+   "body": "Strong decoction, every evening.",
+   "hashtags": [],
+   "why_bad": "Invents a founding year."
+  },
+  {
+   "id": 12,
+   "category": "broken_script",
+   "language": "kn",
+   "channel": "instagram_post",
+   "headline": "ಾಕಾಫಿ ಸಮಯ",
+   "body": "ಓದಿನ ನಡುವೆ ಒಂದು ಬ್ರೇಕ್.",
+   "hashtags": [],
+   "why_bad": "Kannada word starts with a vowel sign."
+  },
+  {
+   "id": 13,
+   "category": "broken_script",
+   "language": "kn",
+   "channel": "instagram_post",
+   "headline": "ಕಾಫಿಿ ಬ್ರೇಕ್",
+   "body": "ಗಟ್ಟಿ ಕಾಫಿ, ಬಿಸಿ ವಡೆ.",
+   "hashtags": [],
+   "why_bad": "Doubled Kannada vowel sign."
+  },
+  {
+   "id": 14,
+   "category": "broken_script",
+   "language": "hi",
+   "channel": "instagram_post",
+   "headline": "ाफ़िल्टर कॉफ़ी",
+   "body": "पढ़ाई के बीच एक ब्रेक।",
+   "hashtags": [],
+   "why_bad": "Hindi word starts with a vowel sign."
+  },
+  {
+   "id": 15,
+   "category": "broken_script",
+   "language": "kn",
+   "channel": "instagram_post",
+   "headline": "ಕಾಫಿtime ಬ್ರೇಕ್",
+   "body": "ಗಟ್ಟಿ ಕಾಫಿ, ಬಿಸಿ ವಡೆ.",
+   "hashtags": [],
+   "why_bad": "Latin letters inside a Kannada word."
+  },
+  {
+   "id": 16,
+   "category": "broken_script",
+   "language": "hi",
+   "channel": "instagram_post",
+   "headline": "चायtime ब्रेक",
+   "body": "कड़क कॉफ़ी, गरम वड़ा।",
+   "hashtags": [],
+   "why_bad": "Latin letters inside a Hindi word."
+  },
+  {
+   "id": 17,
+   "category": "forbidden_claim",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Free vada with every coffee",
+   "body": "After class, every weekday.",
+   "hashtags": [],
+   "why_bad": "Promises something free."
+  },
+  {
+   "id": 18,
+   "category": "forbidden_claim",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Kaapi at your door",
+   "body": "Home delivery across Jayanagar.",
+   "hashtags": [],
+   "why_bad": "Promises delivery."
+  },
+  {
+   "id": 19,
+   "category": "forbidden_claim",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Study break kaapi",
+   "body": "Order now on our page.",
+   "hashtags": [],
+   "why_bad": "Asks to order online; customers show a code."
+  },
+  {
+   "id": 20,
+   "category": "forbidden_claim",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Your study break",
+   "body": "DM us for the code.",
+   "hashtags": [],
+   "why_bad": "Sends people to DMs."
+  },
+  {
+   "id": 21,
+   "category": "forbidden_claim",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Unlimited refills for students",
+   "body": "Strong kaapi after class.",
+   "hashtags": [],
+   "why_bad": "Promises unlimited refills."
+  },
+  {
+   "id": 22,
+   "category": "forbidden_claim",
+   "language": "kn",
+   "channel": "instagram_post",
+   "headline": "ಉಚಿತ ವಡೆ ಪ್ರತಿ ಕಾಫಿಗೆ",
+   "body": "ಕ್ಲಾಸ್ ನಂತರ ಬನ್ನಿ.",
+   "hashtags": [],
+   "why_bad": "Promises free vada in Kannada."
+  },
+  {
+   "id": 23,
+   "category": "forbidden_claim",
+   "language": "hi",
+   "channel": "instagram_post",
+   "headline": "मुफ़्त वड़ा हर कॉफ़ी के साथ",
+   "body": "क्लास के बाद आइए।",
+   "hashtags": [],
+   "why_bad": "Promises free vada in Hindi."
+  },
+  {
+   "id": 24,
+   "category": "forbidden_claim",
+   "language": "hi",
+   "channel": "instagram_post",
+   "headline": "कॉफ़ी अब घर पर",
+   "body": "घर पर डिलीवरी, जयनगर में।",
+   "hashtags": [],
+   "why_bad": "Promises delivery in Hindi."
+  },
+  {
+   "id": 25,
+   "category": "forbidden_claim",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Kaapi break, all week",
+   "body": "Strong kaapi after class.",
+   "hashtags": [],
+   "why_bad": "'All week' is on this campaign's forbidden list."
+  },
+  {
+   "id": 26,
+   "category": "forbidden_claim",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Guaranteed the best kaapi",
+   "body": "Come by after class.",
+   "hashtags": [],
+   "why_bad": "Makes a guarantee."
+  },
+  {
+   "id": 27,
+   "category": "machine_voice",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Elevate your evenings",
+   "body": "Kaapi time, the way it should be — strong and hot.",
+   "hashtags": [],
+   "why_bad": "Agency cliche and a long dash."
+  },
+  {
+   "id": 28,
+   "category": "machine_voice",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "A symphony of flavours!",
+   "body": "Delightful kaapi awaits you after class!",
+   "hashtags": [],
+   "why_bad": "Cliches and two exclamation marks."
+  },
+  {
+   "id": 29,
+   "category": "machine_voice",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Unlock the ultimate study break",
+   "body": "Fuel your evening with kaapi.",
+   "hashtags": [],
+   "why_bad": "Cliches."
+  },
+  {
+   "id": 30,
+   "category": "unknown_fact",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "{{price}} for the combo",
+   "body": "Kaapi and vada after class.",
+   "hashtags": [],
+   "why_bad": "Uses an offer detail that does not exist."
+  },
+  {
+   "id": 31,
+   "category": "unknown_fact",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "{{discount_pct}} today",
+   "body": "Kaapi and vada after class.",
+   "hashtags": [],
+   "why_bad": "Uses an offer detail that does not exist."
+  },
+  {
+   "id": 32,
+   "category": "too_long",
+   "language": "en",
+   "channel": "poster",
+   "headline": "Close the books and come down to Kaapi Kone for strong filter kaapi and a crisp vada",
+   "body": "Study break.",
+   "hashtags": [],
+   "why_bad": "Headline too long for a poster."
+  },
+  {
+   "id": 33,
+   "category": "wrong_time",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Kaapi before your first class",
+   "body": "Start your morning with strong decoction.",
+   "hashtags": [],
+   "why_bad": "Morning; the offer is 4 to 7 pm."
+  },
+  {
+   "id": 34,
+   "category": "implied_free",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Tonight, the kaapi is on us",
+   "body": "Bring your college ID.",
+   "hashtags": [],
+   "why_bad": "'On us' means free, and 'tonight' is outside the hours."
+  },
+  {
+   "id": 35,
+   "category": "wrong_days",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Treat the family this weekend",
+   "body": "Kaapi and vada for everyone at home.",
+   "hashtags": [],
+   "why_bad": "Weekend and families; the offer is weekdays, students."
+  },
+  {
+   "id": 36,
+   "category": "wrong_scope",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Everything on the menu is cheaper",
+   "body": "Pick anything you like after class.",
+   "hashtags": [],
+   "why_bad": "The discount is on one combo only."
+  },
+  {
+   "id": 37,
+   "category": "wrong_item",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Sweet, syrupy vada with your kaapi",
+   "body": "After class, every weekday.",
+   "hashtags": [],
+   "why_bad": "Masala vada is savoury."
+  },
+  {
+   "id": 38,
+   "category": "contradicts_condition",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "No ID needed, bring anyone",
+   "body": "Kaapi and vada after class.",
+   "hashtags": [],
+   "why_bad": "The offer needs a college ID."
+  },
+  {
+   "id": 39,
+   "category": "wrong_time",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Grab it any time of day",
+   "body": "Kaapi and vada whenever you like.",
+   "hashtags": [],
+   "why_bad": "The offer is 4 to 7 pm."
+  },
+  {
+   "id": 40,
+   "category": "wrong_item",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Our new cold coffee is here",
+   "body": "Try it after class.",
+   "hashtags": [],
+   "why_bad": "Cold coffee is not in the offer."
+  },
+  {
+   "id": 41,
+   "category": "wrong_time",
+   "language": "kn",
+   "channel": "instagram_post",
+   "headline": "ರಾತ್ರಿ ಕಾಫಿ ಬ್ರೇಕ್",
+   "body": "ಕ್ಲಾಸ್ ನಂತರ ಬನ್ನಿ.",
+   "hashtags": [],
+   "why_bad": "Says night; the offer is evening."
+  },
+  {
+   "id": 42,
+   "category": "wrong_time",
+   "language": "kn",
+   "channel": "instagram_post",
+   "headline": "ಬೆಳಗಿನ ತಿಂಡಿಗೆ ಬನ್ನಿ",
+   "body": "ಗಟ್ಟಿ ಕಾಫಿ, ಬಿಸಿ ವಡೆ.",
+   "hashtags": [],
+   "why_bad": "Breakfast; the offer is evening."
+  },
+  {
+   "id": 43,
+   "category": "wrong_days",
+   "language": "kn",
+   "channel": "instagram_post",
+   "headline": "ವಾರಾಂತ್ಯದಲ್ಲಿ ಕುಟುಂಬದ ಜೊತೆ ಬನ್ನಿ",
+   "body": "ಎಲ್ಲರಿಗೂ ಕಾಫಿ, ವಡೆ.",
+   "hashtags": [],
+   "why_bad": "Weekend family outing; the offer is weekdays, students."
+  },
+  {
+   "id": 44,
+   "category": "wrong_time",
+   "language": "hi",
+   "channel": "instagram_post",
+   "headline": "रात को कॉफ़ी ब्रेक",
+   "body": "क्लास के बाद आइए।",
+   "hashtags": [],
+   "why_bad": "Says night; the offer is evening."
+  },
+  {
+   "id": 45,
+   "category": "wrong_time",
+   "language": "hi",
+   "channel": "instagram_post",
+   "headline": "नाश्ते के लिए आइए",
+   "body": "कड़क कॉफ़ी, गरम वड़ा।",
+   "hashtags": [],
+   "why_bad": "Breakfast; the offer is evening."
+  },
+  {
+   "id": 46,
+   "category": "wrong_scope",
+   "language": "hi",
+   "channel": "instagram_post",
+   "headline": "पूरे हफ़्ते, सबके लिए",
+   "body": "कड़क कॉफ़ी, गरम वड़ा।",
+   "hashtags": [],
+   "why_bad": "All week and for everyone; the offer is weekdays, students."
+  },
+  {
+   "id": 47,
+   "category": "invented_service",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Parcels packed in two minutes",
+   "body": "Grab your kaapi and go.",
+   "hashtags": [],
+   "why_bad": "Promises fast takeaway packing."
+  },
+  {
+   "id": 48,
+   "category": "invented_offer",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Two coffees for the price of one",
+   "body": "Bring a friend after class.",
+   "hashtags": [],
+   "why_bad": "A different offer, in words."
+  },
+  {
+   "id": 49,
+   "category": "wrong_price",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Half price for students",
+   "body": "Kaapi and vada after class.",
+   "hashtags": [],
+   "why_bad": "Half price is 50%, not 15%."
+  },
+  {
+   "id": 50,
+   "category": "wrong_dates",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "This offer never ends",
+   "body": "Come whenever you like.",
+   "hashtags": [],
+   "why_bad": "The offer ends on 6 Nov."
+  }
+ ],
+ "good": [
+  {
+   "id": 101,
+   "category": "good",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "{{discount}} on your study break",
+   "body": "Close the books for a bit. Strong kaapi and a crisp vada are waiting.",
+   "hashtags": [],
+   "why_bad": "A plain, true post."
+  },
+  {
+   "id": 102,
+   "category": "good",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Exam week needs kaapi",
+   "body": "Come down after class. The decoction is as strong as ever.",
+   "hashtags": [],
+   "why_bad": "No offer details typed."
+  },
+  {
+   "id": 103,
+   "category": "good",
+   "language": "en",
+   "channel": "whatsapp",
+   "headline": "Your evening kaapi",
+   "body": "Steel tumbler, hot vada, ten quiet minutes.",
+   "hashtags": [],
+   "why_bad": "No offer details typed."
+  },
+  {
+   "id": 104,
+   "category": "good",
+   "language": "kn",
+   "channel": "instagram_post",
+   "headline": "ಓದಿನ ನಡುವೆ ಒಂದು ಬ್ರೇಕ್",
+   "body": "ಗಟ್ಟಿ ಡಿಕಾಕ್ಷನ್ ಕಾಫಿ, ಬಿಸಿ ವಡೆ ಕಾಯುತ್ತಿವೆ.",
+   "hashtags": [],
+   "why_bad": "Well-formed Kannada."
+  },
+  {
+   "id": 105,
+   "category": "good",
+   "language": "kn",
+   "channel": "instagram_post",
+   "headline": "ಸಂಜೆ ಕಾಫಿ ಸಮಯ",
+   "body": "ಕ್ಲಾಸ್ ಮುಗಿದ ಮೇಲೆ ಬನ್ನಿ.",
+   "hashtags": [],
+   "why_bad": "Well-formed Kannada."
+  },
+  {
+   "id": 106,
+   "category": "good",
+   "language": "hi",
+   "channel": "instagram_post",
+   "headline": "पढ़ाई के बीच एक ब्रेक",
+   "body": "कड़क फ़िल्टर कॉफ़ी और गरम वड़ा आपका इंतज़ार कर रहे हैं।",
+   "hashtags": [],
+   "why_bad": "Well-formed Hindi."
+  },
+  {
+   "id": 107,
+   "category": "good",
+   "language": "hi",
+   "channel": "instagram_post",
+   "headline": "शाम की कॉफ़ी",
+   "body": "क्लास के बाद आइए।",
+   "hashtags": [],
+   "why_bad": "Well-formed Hindi."
+  },
+  {
+   "id": 108,
+   "category": "good",
+   "language": "en",
+   "channel": "instagram_post",
+   "headline": "Kaapi after class",
+   "body": "Show your college ID at the counter.",
+   "hashtags": [],
+   "why_bad": "Restates a condition in words."
+  },
+  {
+   "id": 109,
+   "category": "good",
+   "language": "en",
+   "channel": "instagram_story",
+   "headline": "Midterms getting to you?",
+   "body": "A short break with strong kaapi helps.",
+   "hashtags": [],
+   "why_bad": "No offer details typed."
+  },
+  {
+   "id": 110,
+   "category": "good",
+   "language": "en",
+   "channel": "poster",
+   "headline": "{{combo}} after class",
+   "body": "The vada comes out of the oil hot.",
+   "hashtags": [],
+   "why_bad": "Uses an offer slot."
+  }
+ ]
+}

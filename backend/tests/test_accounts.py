@@ -106,7 +106,7 @@ def test_margin_check_without_costs_says_so():
 
 async def test_results_report_conversion_per_post(client):
     r = (await client.get("/api/businesses/kaapi-kone/results")).json()
-    assert set(r["totals"]) == {"scans", "claims", "redeemed", "sales", "simulated", "conversion"}
+    assert set(r["totals"]) == {"scans", "claims", "redeemed", "came_back", "sales", "simulated", "conversion"}
     for p in r["posts"]:
         assert p["link"].endswith("/r/" + p["code"])
 
@@ -179,3 +179,72 @@ async def test_staff_phone_uses_the_counter_pin(client):
     async with connection() as conn:
         await conn.execute("update businesses set counter_pin_hash = null, profile = profile - 'whatsapp' "
                            "where slug = 'kaapi-kone'")
+
+
+async def test_festivals_are_off_unless_switched_on(client, monkeypatch):
+    from app.agent import situation
+    from app.config import get_settings
+    from app.db import connection
+
+    assert (await client.get("/api/businesses/kaapi-kone/culture")).json() == {"festivals": []}
+    async with connection() as conn:
+        b = await (await conn.execute("select * from businesses where slug = 'kaapi-kone'")).fetchone()
+        snap = await situation.snapshot(conn, b, None)
+    assert "festivals" not in snap and not any(f.get("festival") for f in snap["findings"])
+    monkeypatch.setattr(get_settings(), "festivals", True)
+    assert "festivals" in (await client.get("/api/businesses/kaapi-kone/culture")).json()
+
+
+async def test_sarvam_pays_once_per_text(client, monkeypatch):
+    from app import sarvam
+
+    calls: list[str] = []
+
+    async def paid(text: str, source: str, target: str) -> str:
+        calls.append(text)
+        return "ಫಿಲ್ಟರ್ ಕಾಫಿ"
+
+    monkeypatch.setattr(sarvam, "_translate", paid)
+    assert await sarvam.translate("filter coffee", "en", "kn") == "ಫಿಲ್ಟರ್ ಕಾಫಿ"
+    assert await sarvam.translate(" filter coffee ", "en", "kn") == "ಫಿಲ್ಟರ್ ಕಾಫಿ"
+    assert await sarvam.translate("filter coffee", "en", "hi") == "ಫಿಲ್ಟರ್ ಕಾಫಿ"  # another language is another text
+    assert calls == ["filter coffee", "filter coffee"]
+
+
+async def test_scout_ideas_ride_on_real_moments_and_menu_items(client, scripted, monkeypatch):
+    import json
+    from datetime import date, timedelta
+
+    from app import moments
+    from tests.fakes import text
+
+    today = date.today()
+
+    async def forecast(city: str) -> list[dict]:
+        return [{"date": today.isoformat(), "evening_rain_pct": 85, "tmax": 26}]
+
+    monkeypatch.setattr(moments, "forecast", forecast)
+    match = (today + timedelta(days=2)).isoformat()
+    r = await client.post("/api/businesses/kaapi-kone/moments",
+                          json={"name": "IPL: RCB vs CSK", "starts_on": match, "note": "7:30 pm"})
+    assert r.status_code == 200
+    found = {m["key"]: m for m in (await client.get("/api/businesses/kaapi-kone/moments")).json()["moments"]}
+    assert found[f"rain-{today}"]["source"] == "Open-Meteo forecast"
+    assert found["event-own-ipl-rcb-vs-csk"]["source"] == "You added this"
+
+    idea = {"title": "Match night kaapi", "brief": "Filter coffee and masala vada combo for the RCB match, 6 to 8 pm",
+            "audience": "cricket fans", "why": "Fans gather nearby before the match.", "items": ["filter coffee", "Masala vada"]}
+    scripted.push(text(json.dumps({"ideas": [
+        idea | {"moment_key": "event-own-ipl-rcb-vs-csk"},
+        idea | {"moment_key": "event-ipl-final-made-up", "title": "Invented match"},  # not a real moment
+        idea | {"moment_key": f"rain-{today}", "title": "Rainy pizza", "items": ["Pizza"]},  # not on the menu
+    ]})))
+    out = (await client.post("/api/businesses/kaapi-kone/opportunities")).json()
+    assert [i["title"] for i in out["ideas"]] == ["Match night kaapi"]
+    assert out["ideas"][0]["items"] == ["Filter coffee", "Masala vada"]  # spelled as on the menu
+    assert out["ideas"][0]["moment"]["title"] == "IPL: RCB vs CSK"
+    led = (await client.get("/api/businesses/kaapi-kone/ledger", params={"limit": 5})).json()
+    assert any(e["type"] == "scout.ideas" for e in led)
+
+    assert (await client.delete("/api/businesses/kaapi-kone/moments/event-own-ipl-rcb-vs-csk")).status_code == 200
+    assert (await client.delete("/api/businesses/kaapi-kone/moments/event-midterms_2026")).status_code == 404  # not yours

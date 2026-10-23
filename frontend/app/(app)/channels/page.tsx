@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, InstagramLogo, LinkBreak, Plugs, WarningCircle, WhatsappLogo } from "@phosphor-icons/react";
+import { Check, Copy, GoogleLogo, InstagramLogo, LinkBreak, Plugs, WarningCircle, WhatsappLogo } from "@phosphor-icons/react";
 import clsx from "clsx";
 import { useState } from "react";
 import { Shell } from "@/components/shell";
@@ -76,6 +76,7 @@ function WhatsApp({ s, onChange }: { s: ChannelsStatus; onChange: () => void }) 
   const [pid, setPid] = useState("");
   const [token, setToken] = useState("");
   const [template, setTemplate] = useState(s.whatsapp?.template?.name ?? "");
+  const [waba, setWaba] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const wa = s.whatsapp;
@@ -87,7 +88,7 @@ function WhatsApp({ s, onChange }: { s: ChannelsStatus; onChange: () => void }) 
     try {
       await api(`/businesses/${business.slug}/channels/whatsapp`, {
         method: "PUT",
-        json: { phone_number_id: pid.trim(), token: token.trim(), template: template.trim() || null },
+        json: { phone_number_id: pid.trim(), token: token.trim(), template: template.trim() || null, waba_id: waba.trim() || null },
       });
       setToken("");
       onChange();
@@ -128,7 +129,7 @@ function WhatsApp({ s, onChange }: { s: ChannelsStatus; onChange: () => void }) 
               <b className="text-ink">{wa.contacts.reachable}</b> customers can get offers · <b className="text-ink">{wa.contacts.free_now}</b> wrote in the last 24 hours (free to message now)
             </p>
             <p className="text-[13px] text-muted">
-              {wa.template ? `Template for everyone else: ${wa.template.name} (Meta charges about ₹0.86 per message in India).` : "Without an approved template, posts only go to customers who wrote in the last 24 hours."}
+              {wa.template ? `Template for everyone else: ${wa.template.name} (Meta charges about ₹0.86 per message in India).` : "Without an approved template, posts only go to customers who wrote in the last 24 hours. Each live WhatsApp post can draft its own template under Share."}
             </p>
           </div>
           <div className="space-y-3">
@@ -151,6 +152,7 @@ function WhatsApp({ s, onChange }: { s: ChannelsStatus; onChange: () => void }) 
             {!s.public_ok && <p className="text-[13px] text-turmeric">This is not a public https address yet, so Meta cannot reach it. The go_live command above fixes that.</p>}
             <input className={field} value={pid} onChange={(e) => setPid(e.target.value.replace(/\D/g, ""))} placeholder="Phone number ID" inputMode="numeric" aria-label="Phone number ID" />
             <input className={field} value={token} onChange={(e) => setToken(e.target.value)} placeholder="Access token" type="password" autoComplete="off" aria-label="Access token" />
+            <input className={field} value={waba} onChange={(e) => setWaba(e.target.value.replace(/\D/g, ""))} placeholder="WhatsApp Business Account ID (to get templates approved)" inputMode="numeric" aria-label="WhatsApp Business Account ID" />
             <input className={field} value={template} onChange={(e) => setTemplate(e.target.value.toLowerCase())} placeholder="Approved template name (optional)" aria-label="Template name" />
             <Button type="submit" variant="primary" className="w-full" disabled={busy || pid.length < 5 || token.length < 20}>
               {busy ? "Checking with Meta…" : "Connect WhatsApp"}
@@ -226,13 +228,88 @@ function Instagram({ s, onChange }: { s: ChannelsStatus; onChange: () => void })
   );
 }
 
+/** The business's Google listing: offers posted from a campaign show on Google Search and Maps. */
+function Google({ s, onChange }: { s: ChannelsStatus; onChange: () => void }) {
+  const business = useBusiness();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const g = s.google.account;
+  const back = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const result = back?.get("google");
+
+  async function connect() {
+    setBusy(true);
+    setError(null);
+    try {
+      window.location.href = (await api<{ url: string }>(`/businesses/${business.slug}/channels/google/connect`)).url;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  }
+  async function choose(location: string) {
+    await api(`/businesses/${business.slug}/channels/google`, { method: "PUT", json: { location } });
+    onChange();
+  }
+
+  return (
+    <section className="rounded-[var(--radius-lg)] bg-surface p-5 ring-1 ring-ink md:p-7" aria-labelledby="gb-h">
+      <div className="flex flex-wrap items-center gap-3">
+        <GoogleLogo size={26} weight="bold" className="text-pen" aria-hidden />
+        <h2 id="gb-h" className="flex-1 text-[26px]">
+          Google Business Profile
+        </h2>
+        {g && <Disconnect channel="google_business" onDone={onChange} />}
+      </div>
+      <p className="mt-2 max-w-[70ch] text-[15px] text-ink-2">
+        Put a campaign's offer on your own Google listing, where people find you on Search and Maps. It carries the offer's dates, its code as the coupon and the tracked link, so a customer who finds it on Google is counted like any other.
+      </p>
+      {result === "error" && <p className="mt-3 text-[14px] text-kumkum">Google sign-in did not finish: {back?.get("why") ?? "try again"}.</p>}
+      {g?.location ? (
+        <p className="mt-4 text-[18px] font-semibold">
+          Connected: {g.display} <span className="text-[14px] font-normal text-muted">· post offers from any live post under Share</span>
+        </p>
+      ) : g ? (
+        <div className="mt-4">
+          <p className="text-[15px] font-semibold">Which listing should offers go to?</p>
+          <ul className="mt-2 divide-y divide-line border-y border-line">
+            {g.locations.map((l) => (
+              <li key={l.name} className="flex items-center gap-3 py-2.5">
+                <span className="min-w-0 flex-1">
+                  <span className="block font-semibold">{l.title}</span>
+                  <span className="text-[13px] text-muted">{l.address}</span>
+                </span>
+                <Button size="sm" variant="primary" onClick={() => choose(l.name)}>
+                  Use this one
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : s.google.configured ? (
+        <div className="mt-4">
+          <Button variant="primary" disabled={busy} onClick={connect}>
+            {busy ? "Opening Google…" : "Connect with Google"}
+          </Button>
+          <p className="mt-2 text-[13px] text-muted">Sign in with the Google account that manages your listing.</p>
+        </div>
+      ) : (
+        <p className="mt-4 text-[14px] text-muted">
+          Google sign-in is not set up on this server yet (a Google Cloud OAuth client with the Business Profile APIs). Meanwhile every live post has <b>Google offer</b> under Share, with each field ready to paste into business.google.com.
+        </p>
+      )}
+      {error && <p className="mt-3 text-[14px] text-kumkum">{error}</p>}
+    </section>
+  );
+}
+
 /** Where posts actually go: the business's own WhatsApp number and Instagram account. */
 export default function ChannelsPage() {
   const business = useBusiness();
   const { data, reload } = useResource<ChannelsStatus>(`/businesses/${business.slug}/channels`, (e) => e.type.startsWith("channel.") || e.type === "whatsapp.inbound");
   return (
     <Shell>
-      <PageHeader title="Channels" sub="Connect your WhatsApp number and Instagram account, so posts reach real customers and the results come back here." />
+      <PageHeader title="Channels" sub="Connect your WhatsApp number, Instagram account and Google listing, so posts reach real customers and the results come back here." />
       {!data ? (
         <Skeleton className="h-96" />
       ) : (
@@ -265,6 +342,7 @@ export default function ChannelsPage() {
           </p>
           <WhatsApp s={data} onChange={reload} />
           <Instagram s={data} onChange={reload} />
+          <Google s={data} onChange={reload} />
         </div>
       )}
     </Shell>

@@ -91,7 +91,8 @@ async def claim_status(code: str) -> dict[str, Any]:
     """A personal code's page (linked from the WhatsApp reply): the offer, the QR for staff, used or not."""
     async with connection() as conn:
         row = await fetch_one(
-            conn, """select cl.code, cl.status, cl.redeemed_at, cl.campaign_id, a.language, b.name, b.locality,
+            conn, """select cl.code, cl.status, cl.redeemed_at, cl.campaign_id, cl.kind, cl.valid_until, a.language,
+                            b.name, b.locality,
                             b.profile->>'google_review_url' as google_review_url
                      from claims cl join campaigns c on c.id = cl.campaign_id join businesses b on b.id = c.business_id
                      left join assets a on a.id = cl.asset_id where cl.code = %s""", (code.upper(),))
@@ -100,10 +101,13 @@ async def claim_status(code: str) -> dict[str, Any]:
         sheet = await services.locked_sheet(conn, row["campaign_id"])
         review = await fetch_one(conn, "select rating, body from customer_interactions where claim_code = %s",
                                  (row["code"],))
+        again = await fetch_one(conn, """select code, status, valid_from, valid_until from claims
+                                         where parent_code = %s""", (row["code"],))
     lang = row["language"] or "en"
     return {"code": row["code"], "status": row["status"], "redeemed_at": row["redeemed_at"], "language": lang,
             "name": row["name"], "locality": row["locality"], "review": review,
-            "google_review_url": row["google_review_url"],
+            "google_review_url": row["google_review_url"], "come_back": again, "is_come_back": row["kind"] == "return",
+            "valid_until": row["valid_until"],
             "offer": [f.display.get(lang) or f.display.get("en") for f in sheet.facts] if sheet else []}
 
 

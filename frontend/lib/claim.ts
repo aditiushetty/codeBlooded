@@ -12,6 +12,10 @@ export interface ClaimStatus {
   offer: string[];
   review: { rating: number; body: string } | null;
   google_review_url: string | null;
+  /** The come-back code made when this one was used (campaigns with come-back codes on). */
+  come_back: { code: string; status: string; valid_from: string; valid_until: string } | null;
+  is_come_back: boolean;
+  valid_until: string | null;
 }
 
 const EVERY_MS = 6000;
@@ -36,7 +40,7 @@ export function useClaimStatus(code: string | null) {
           const body = await r.json();
           if (!r.ok) return setError(body.detail ?? "This code does not exist.");
           setData(body);
-          if (body.status === "redeemed") return;
+          if (body.status === "redeemed") return; // the come-back code, if any, is made in the same step
         } catch {
           // a dropped connection is retried on the next tick
         }

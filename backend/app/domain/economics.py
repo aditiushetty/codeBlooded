@@ -53,3 +53,10 @@ def offer_economics(
         out["expected_margin_delta"] = round(delta, 2)
         out["expected_extra_covers"] = expected_extra_covers
     return out
+
+
+def return_on_ai(ai_rupees: float, sales: float, redeems: int) -> dict[str, Any]:
+    """What a campaign's AI cost against what came in at the counter (bills typed or matched from a statement)."""
+    return {"ai_rupees": ai_rupees, "sales": round(sales, 2), "redeems": redeems,
+            "sales_per_ai_rupee": round(sales / ai_rupees) if ai_rupees > 0 and sales else None,
+            "ai_per_redeem": round(ai_rupees / redeems, 2) if redeems else None}

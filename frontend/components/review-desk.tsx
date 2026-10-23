@@ -23,6 +23,8 @@ export interface ReviewRow {
   translation: string | null;
   reply: string | null;
   replied_at: string | null;
+  reply_draft?: string | null; // written by the Customer listener; the owner reads, edits and sends it
+
   claim_code: string | null;
   campaign: string | null;
   via: string | null;
@@ -124,6 +126,18 @@ export function ReplyBox({ r, onSaved }: { r: ReviewRow; onSaved: () => void }) 
         <p className="text-[12px] font-semibold text-pen">Your reply</p>
         <p className="text-[14px] text-ink-2" lang={r.language}>{r.reply}</p>
         <button onClick={() => setOpen(true)} className="mt-1 text-[12px] text-muted underline underline-offset-4">Edit</button>
+      </div>
+    );
+  if (!open && r.reply_draft)
+    return (
+      <div className="mt-3 border-l-[3px] border-dashed border-pen pl-3">
+        <p className="text-[12px] font-semibold text-pen">The Customer listener drafted a reply</p>
+        <p className="text-[14px] text-ink-2" lang={r.language}>{r.reply_draft}</p>
+        <div className="mt-2 flex gap-1.5">
+          <Button size="sm" variant="secondary" onClick={() => { setText(r.reply_draft ?? ""); setOpen(true); }}>
+            <PencilSimple size={13} aria-hidden /> Read and send
+          </Button>
+        </div>
       </div>
     );
   if (!open)

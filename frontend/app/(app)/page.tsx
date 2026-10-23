@@ -8,6 +8,7 @@ import { CampaignLedger } from "@/components/campaign-card";
 import { Composer } from "@/components/composer";
 import { FestivalCard } from "@/components/festival-card";
 import { FindingsList, InboxList } from "@/components/inbox";
+import { AroundYou } from "@/components/moments";
 import { InstagramPost } from "@/components/previews";
 import { Shell } from "@/components/shell";
 import { Empty, SectionHeading, Skeleton, stagger } from "@/components/ui";
@@ -32,7 +33,7 @@ function PostStack({ campaignId, name }: { campaignId: string; name: string }) {
     .slice(0, 3);
   if (!posts.length) return null;
   return (
-    <Link href={`/campaigns/${campaignId}`} className="group relative block h-full min-h-[400px]" aria-label={`Open ${name}`}>
+    <Link href={`/campaigns/${campaignId}`} className="group relative block h-full min-h-[440px] [clip-path:inset(-40px_-40px_0_-40px)]" aria-label={`Open ${name}`}>
       {posts.map((a, i) => (
         <div
           key={a.id}
@@ -116,7 +117,7 @@ export default function Today() {
   const example = menu[0] ? `15% off ${menu[0].toLowerCase()} on weekdays, 4 to 7 pm, for students.` : "15% off on weekdays, 4 to 7 pm, for students.";
   const live = current.reduce((n, c) => n + (c.live ?? 0), 0);
   const redeemed = current.reduce((n, c) => n + c.redemptions, 0);
-  const approvals = data?.inbox.filter((i) => i.kind === "approval") ?? [];
+  const approvals = data?.inbox.filter((i) => i.kind === "approval" || i.kind === "question") ?? [];
   // Campaigns waiting on the owner that have no inbox item of their own (e.g. posts ready to approve).
   const waiting = current.filter((c) => [1, 2].includes(stepOfSummary(c)) && !approvals.some((a) => a.campaign_id === c.id));
 
@@ -194,6 +195,11 @@ export default function Today() {
         <div className="hidden lg:col-span-5 lg:block">
           {!data ? <Skeleton className="h-[400px]" /> : showcase ? <PostStack campaignId={showcase.id} name={showcase.name} /> : <GettingStarted campaigns={current.length} live={live} />}
         </div>
+      </section>
+
+      <section className="mt-16" aria-labelledby="around-h">
+        <SectionHeading id="around-h" title="Happening around you" className="border-b-0" sub="The weather, the calendar and the events you add. The Scout turns them into campaigns that fit your menu." />
+        <AroundYou slug={business.slug} onStart={newBrief} />
       </section>
 
       <section className="mt-16" aria-labelledby="camp-h">

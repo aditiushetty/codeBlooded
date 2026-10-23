@@ -2,6 +2,7 @@
 owner edit blocked -> publish -> live attribution -> fact change propagates staleness."""
 
 import json
+from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -26,12 +27,12 @@ FACTS = [
 ]
 
 
-def wording(*bad: str, keys: list[str] | None = None) -> object:
-    """Scripted reply of the fact-wording check: every Kannada wording matches unless its key is in `bad`."""
+def wording(*bad: str, keys: list[str] | None = None, langs: tuple[str, ...] = ("kn",)) -> object:
+    """Scripted reply of the fact-wording check: every translated wording matches unless its key is in `bad`."""
     return text(json.dumps({"checks": [
-        {"key": k, "language": "kn", "back_translation": "Friday to Monday" if k in bad else "same",
+        {"key": k, "language": lang, "back_translation": "Friday to Monday" if k in bad else "same",
          "same_meaning": k not in bad, "issue": "Says Friday to Monday" if k in bad else None}
-        for k in keys or [f["key"] for f in FACTS]]}))
+        for k in keys or [f["key"] for f in FACTS] for lang in langs]}))
 
 
 def content(body: str) -> dict:
@@ -57,23 +58,36 @@ async def test_full_campaign_flow(client, scripted):
     cid = r.json()["id"]
     ctx = await ctx_for(client, cid)
 
-    # --- agent: checks economics, drafts facts, asks to lock (gated), then stops
+    # --- Orchestrator hands the brief to the Offer agent: it checks economics and drafts facts; the Orchestrator
+    # then asks the owner to lock (gated) and stops
+    soon = [(date.today() + timedelta(days=d)).isoformat() for d in (1, 2)]
+    hindi = {"discount": "20% छूट", "combo": "फ़िल्टर कॉफ़ी + मसाला वड़ा", "days": "इस शनिवार और रविवार",
+             "dine_in": "सिर्फ़ कैफ़े में"}
+    offer = [f | {"display": {**f["display"], "hi": hindi[f["key"]]}} | ({"value": soon} if f["key"] == "days" else {})
+             for f in FACTS]
     scripted.push(
+        calls(("ask_offer", {"task": "Turn the brief into offer facts"})),
+        # Offer agent
         calls(("evaluate_offer", {"item_names": ["Filter coffee", "Masala vada"], "discount_pct": 20})),
-        calls(("draft_offer_facts", {"facts": FACTS, "forbidden_claims": {"en": ["free", "all day"]},
-                                     "reason": "From the owner's brief"}),
-              ("lock_facts", {"summary": "Lock: 20% off kaapi + vada, Sat & Sun, dine-in"})),
-        wording(),  # the draft tool checks the Kannada wording before the lock request is queued
+        calls(("draft_offer_facts", {"facts": offer, "forbidden_claims": {"en": ["free", "all day"]},
+                                     "reason": "From the owner's brief"})),
+        wording(langs=("kn", "hi")),  # the draft tool checks the Kannada and Hindi wording
+        *[text("20% off filter coffee + vada this weekend; ready to lock, no questions.")] * 2,
+        # Orchestrator again
+        calls(("lock_facts", {"summary": "Lock: 20% off kaapi + vada, Sat & Sun, dine-in"})),
         text("Now I will set the campaign plan."),  # announces instead of acting: the loop asks once more
         text("Drafted the offer and asked you to lock it."),
     )
     out = await runtime.run(ctx, "New brief")
     assert out["status"] == "done" and out["message"] == "Drafted the offer and asked you to lock it.", out
     assert scripted.requests[-1]["messages"][-1]["content"] == runtime.CONTINUE
-    assert [s["tool"] for s in out["steps"]] == ["evaluate_offer", "draft_offer_facts", "lock_facts"]
-    # the economics result was fed back to the model
-    tool_msgs = [m for m in scripted.requests[1]["messages"] if m["role"] == "tool"]
-    assert "break_even_extra_covers" in tool_msgs[0]["content"]
+    assert [s["tool"] for s in out["steps"]] == ["ask_offer", "lock_facts"]
+    report = json.loads(next(m["content"] for m in scripted.requests[-1]["messages"]
+                             if m["role"] == "tool" and '"agent": "Offer agent"' in m["content"]))
+    evaluated, drafted = (st["result"] for st in report["steps"])
+    # the economics reached the Offer agent, and the draft came back with no gaps and its own margin check
+    assert "break_even_extra_covers" in evaluated
+    assert drafted["gaps"] == [] and drafted["can_ask_to_lock"] and drafted["margin"]["verdict"] == "healthy"
 
     # gated: facts are NOT locked, an approval waits in the inbox
     camp = (await client.get(f"/api/campaigns/{cid}")).json()
@@ -181,9 +195,9 @@ async def test_full_campaign_flow(client, scripted):
     assert st["prior"]["from_campaign_assets"] >= 3 and st["decision"]["winner"] is None
 
     # --- owner: "make it Sunday only" -> revise + lock -> only date-dependent assets go stale
-    scripted.push(wording())
+    scripted.push(wording(langs=("kn", "hi")))
     res = await runtime.execute(ctx, "revise_offer_facts", {"reason": "Saturday private booking", "changes": [
-        {"key": "days", "value": ["2026-10-11"], "display": {"en": "this Sunday", "kn": "ಈ ಭಾನುವಾರ"}}]})
+        {"key": "days", "value": ["2026-10-11"], "display": {"en": "this Sunday", "kn": "ಈ ಭಾನುವಾರ", "hi": "इस रविवार"}}]})
     assert res["ok"]
     r = await client.post(f"/api/campaigns/{cid}/facts/lock", params={"resume": False})
     assert r.json()["changed"] == ["days"] and good["asset_id"] in r.json()["stale_assets"]

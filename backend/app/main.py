@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import db
+from app import db, usage
 from app.api.channels import channels_api, webhook
 from app.api.owner import api
 from app.api.public import public
@@ -22,6 +22,7 @@ async def lifespan(app: FastAPI):
     s = get_settings()
     await db.open_pool(s.database_url)
     app.state.router = build_router(s)
+    app.state.router.on_call = usage.keep  # each campaign's AI cost, shown next to its sales
     storage = get_storage()
     if isinstance(storage, SupabaseStorage):
         await storage.ensure_bucket()

@@ -40,6 +40,9 @@ THANKS = {"en": "Thank you! {name} reads every review.", "kn": "ಧನ್ಯವ�
           "hi": "धन्यवाद! {name} हर राय पढ़ता है।"}
 ON_GOOGLE = {"en": "If you have a minute, you can also post it on Google:", "kn": "ಸಮಯವಿದ್ದರೆ Google ನಲ್ಲೂ ಬರೆಯಿರಿ:",
              "hi": "समय हो तो Google पर भी लिखें:"}
+COME_BACK = {"en": "Come back by {until} and show this code for the same offer once more: *{code}*",
+             "kn": "{until} ರೊಳಗೆ ಮತ್ತೆ ಬನ್ನಿ, ಇದೇ ಆಫರ್ ಮತ್ತೊಮ್ಮೆ ಪಡೆಯಲು ಈ ಕೋಡ್ ತೋರಿಸಿ: *{code}*",
+             "hi": "{until} तक फिर आइए, यही ऑफ़र एक बार और पाने के लिए यह कोड दिखाइए: *{code}*"}
 STARS = re.compile(r"^\s*([1-5])(?![\d.])\s*(?:/\s*5)?\s*[-:,.!]*\s*")
 
 TEXT = {
@@ -112,6 +115,9 @@ async def handle(payload: dict[str, Any], router: Any = None) -> None:
     """Process one webhook delivery: customer messages and delivery receipts. Safe to receive twice."""
     for entry in payload.get("entry") or []:
         for change in entry.get("changes") or []:
+            if change.get("field") == "message_template_status_update":
+                await template_status(change.get("value") or {})
+                continue
             if change.get("field") != "messages":
                 continue
             v = change.get("value") or {}
@@ -246,7 +252,12 @@ async def ask_review(claim_code: str) -> bool:
         if not acct or not phone:
             return False
         await conn.execute("update claims set review_asked_at = now() where code = %s", (claim_code,))
-    await _reply(acct, phone, ASK_REVIEW.get(cl["language"], ASK_REVIEW["en"]).format(name=cl["name"]), "review_ask", None)
+        again = await fetch_one(conn, "select code, valid_until from claims where parent_code = %s", (claim_code,))
+    lang = cl["language"] if cl["language"] in ASK_REVIEW else "en"
+    body = ASK_REVIEW[lang].format(name=cl["name"])
+    if again:  # the come-back code goes in the same free message
+        body += "\n\n" + COME_BACK[lang].format(until=f"{again['valid_until']:%-d %b}", code=again["code"])
+    await _reply(acct, phone, body, "review_ask", None)
     return True
 
 
@@ -299,6 +310,9 @@ async def broadcast(business: dict[str, Any], asset_id: str) -> dict[str, Any]:
         contacts = await fetch_all(conn, """select phone, last_inbound_at from wa_contacts
                                             where business_id = %s and opted_out_at is null""", (business["id"],))
     template = (acct.get("meta") or {}).get("template")
+    async with connection() as conn:  # this post's own approved template, if the owner had one approved
+        own = await fetch_one(conn, """select name, language from wa_templates where asset_id = %s
+                                       and status = 'approved' order by updated_at desc limit 1""", (asset["id"],))
     now = datetime.now(UTC)
     out = {"sent": 0, "template": 0, "skipped": 0, "failed": 0, "errors": []}
     for c in contacts:
@@ -311,7 +325,12 @@ async def broadcast(business: dict[str, Any], asset_id: str) -> dict[str, Any]:
                                              *rendered.get("offer", []), "", link, "", "Reply STOP to stop offers."] if x is not None)
                 wamid, kind = await send_text(acct, c["phone"], body), "broadcast"
                 out["sent"] += 1
-            elif template:  # outside the window only an approved template may go, and Meta charges for it
+            elif own:  # outside the window only an approved template may go, and Meta charges for it
+                body = f"{own['name']}: {link}"
+                wamid = await send_template(acct, c["phone"], own["name"], own["language"], [link])
+                kind = "template"
+                out["template"] += 1
+            elif template:
                 body = f"{template['name']}: {rendered.get('headline', '')} {link}"
                 wamid = await send_template(acct, c["phone"], template["name"], template.get("language", "en"),
                                             [business["name"], rendered.get("headline", ""), link])
@@ -373,3 +392,68 @@ async def send_review_reply(review: dict[str, Any], body: str) -> bool:
         return False
     await _reply(acct, phone, body, "review_reply", None)
     return True
+
+
+# ------------------------------------------------------------------ message templates (outside the 24-hour window)
+
+
+def _waba(acct: dict[str, Any]) -> str:
+    waba = (acct.get("meta") or {}).get("waba_id")
+    if not waba:
+        raise services.Conflict("The WhatsApp Business Account id is missing. Reconnect WhatsApp on the Channels "
+                                "page and add it (Meta Business Suite, WhatsApp accounts, Account ID).")
+    return str(waba)
+
+
+async def submit_template(acct: dict[str, Any], t: dict[str, Any]) -> dict[str, Any]:
+    """Send a checked draft to Meta for approval. -> {id, status} (usually PENDING; sometimes approved at once)."""
+    from app.domain import wa_template
+
+    d = await meta.graph("POST", meta.url(meta.FB, f"{_waba(acct)}/message_templates"), token=acct["token"],
+                         json={"name": t["name"], "language": t["language"], "category": t["category"],
+                               "components": wa_template.components(t)})
+    return {"id": str(d.get("id")), "status": wa_template.STATUS.get(str(d.get("status", "PENDING")).upper(), "pending")}
+
+
+async def sync_templates(acct: dict[str, Any]) -> int:
+    """Read Meta's verdict on this business's submitted templates. -> rows changed."""
+    from app.domain import wa_template
+
+    d = await meta.graph("GET", meta.url(meta.FB, f"{_waba(acct)}/message_templates"), token=acct["token"],
+                         params={"fields": "id,name,language,status,rejected_reason", "limit": 200})
+    changed = 0
+    async with connection() as conn:
+        for row in d.get("data") or []:
+            status = wa_template.STATUS.get(str(row.get("status", "")).upper())
+            if not status:
+                continue
+            reason = row.get("rejected_reason")
+            cur = await conn.execute(
+                """update wa_templates set status = %s, reason = %s, meta_id = coalesce(meta_id, %s), updated_at = now()
+                   where business_id = %s and name = %s and language = %s and status <> 'draft'
+                     and (status, coalesce(reason, '')) is distinct from (%s, coalesce(%s, ''))""",
+                (status, None if reason in (None, "NONE") else reason, row.get("id"), acct["business_id"],
+                 row.get("name"), row.get("language"), status, None if reason in (None, "NONE") else reason))
+            changed += cur.rowcount
+    return changed
+
+
+async def template_status(v: dict[str, Any]) -> None:
+    """Webhook: Meta approved, rejected, paused or disabled a template."""
+    from app.domain import wa_template
+
+    status = wa_template.STATUS.get(str(v.get("event", "")).upper())
+    if not status:
+        return
+    reason = v.get("reason") if v.get("reason") not in (None, "NONE") else None
+    async with connection() as conn:
+        row = await fetch_one(
+            conn, """update wa_templates set status = %s, reason = %s, updated_at = now()
+                     where meta_id = %s or (name = %s and language = %s and status <> 'draft')
+                     returning business_id, name""",
+            (status, reason, str(v.get("message_template_id")), v.get("message_template_name"),
+             v.get("message_template_language")))
+        if row:
+            await ledger.record(conn, row["business_id"], "whatsapp.template",
+                                f"WhatsApp template {row['name']}: {status}" + (f" ({reason})" if reason else ""),
+                                actor="system", payload={"status": status, "reason": reason})

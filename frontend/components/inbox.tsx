@@ -1,7 +1,8 @@
 "use client";
 
-import { ArrowRight, CalendarBlank, Check, Lightbulb, LockSimple, Megaphone, WarningCircle } from "@phosphor-icons/react";
+import { ArrowRight, CalendarBlank, ChartLineUp, ChatCircleDots, Check, Ear, Lightbulb, LockSimple, Megaphone, PaperPlaneRight, WarningCircle } from "@phosphor-icons/react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { api } from "@/lib/api";
 import type { Finding, InboxItem } from "@/lib/types";
@@ -13,6 +14,19 @@ const EFFECT: Record<string, string> = {
 };
 
 const ICON: Record<string, typeof LockSimple> = { lock_facts: LockSimple, publish_assets: Megaphone };
+const AGENT: Record<string, string> = {
+  brief: "Brief agent", offer: "Offer agent", change: "Change agent", analyst: "Analyst", listener: "Customer listener", scout: "Scout",
+};
+
+/** Who is speaking in an inbox item, in the owner's words. */
+function heading(item: InboxItem): string {
+  const who = AGENT[item.payload.asked_by ?? ""];
+  if (item.kind === "question") return `The ${who ?? "Offer agent"} asks`;
+  if (item.kind === "approval") return "Needs your OK";
+  if (item.kind === "finding" && who) return `The ${who} noticed`;
+  if (who) return `The ${who} suggests`;
+  return "Suggestion from Counterpart";
+}
 
 export function InboxList({ items, onChange, showCampaignLink = true }: { items: InboxItem[]; onChange?: () => void; showCampaignLink?: boolean }) {
   if (!items.length)
@@ -33,15 +47,27 @@ export function InboxList({ items, onChange, showCampaignLink = true }: { items:
 function InboxRow({ item, n, onChange, showCampaignLink }: { item: InboxItem; n: number; onChange?: () => void; showCampaignLink: boolean }) {
   const [busy, setBusy] = useState<"approve" | "decline" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [answer, setAnswer] = useState("");
+  const router = useRouter();
   const tool = item.payload.tool;
-  const approval = item.kind === "approval";
-  const Icon = (tool && ICON[tool]) || Lightbulb;
+  const question = item.kind === "question";
+  const approval = item.kind === "approval" || question;
+  // a suggestion the team can act on: the Analyst's next move, or a follow-up campaign with a ready brief
+  const actionable = item.kind === "recommendation" && !!(item.payload.instruction || item.payload.brief);
+  const Icon = question
+    ? ChatCircleDots
+    : item.payload.asked_by === "analyst"
+      ? ChartLineUp
+      : item.payload.asked_by === "listener"
+        ? Ear
+        : (tool && ICON[tool]) || Lightbulb;
 
-  async function decide(approve: boolean) {
+  async function decide(approve: boolean, note?: string) {
     setBusy(approve ? "approve" : "decline");
     setError(null);
     try {
-      await api(`/inbox/${item.id}/decision`, { method: "POST", json: { approve } });
+      const res = await api<{ campaign_id?: string }>(`/inbox/${item.id}/decision`, { method: "POST", json: { approve, note } });
+      if (res.campaign_id) router.push(`/campaigns/${res.campaign_id}`);
       onChange?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -53,18 +79,30 @@ function InboxRow({ item, n, onChange, showCampaignLink }: { item: InboxItem; n:
   return (
     <li className="rise-in py-5" style={stagger(n)}>
       <div className="flex gap-4">
-        <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-sm)] ${approval ? "bg-ink text-marker" : "bg-pen-soft text-pen"}`}>
+        <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-sm)] ${approval || actionable ? "bg-ink text-marker" : "bg-pen-soft text-pen"}`}>
           <Icon size={20} weight="bold" aria-hidden />
         </span>
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-x-2 text-[13px] text-muted">
-            <span className={approval ? "font-semibold text-ink" : "font-semibold text-pen"}>{approval ? "Needs your OK" : "Suggestion from Counterpart"}</span>
+            <span className={approval || actionable ? "font-semibold text-ink" : "font-semibold text-pen"}>{heading(item)}</span>
             <span aria-hidden>·</span>
             {timeAgo(item.created_at)}
           </p>
           <p className="mt-1 text-[19px] font-bold leading-snug [font-stretch:90%]">{item.title}</p>
           {item.body && <p className="mt-1 text-[15px] text-ink-2">{item.body}</p>}
           {tool && EFFECT[tool] && <p className="mt-1 text-[14px] text-muted">{EFFECT[tool]}</p>}
+          {item.payload.instruction && (
+            <p className="mt-2 text-[14px] text-ink-2">
+              <span className="font-semibold text-ink">If you say yes: </span>
+              {item.payload.instruction}
+            </p>
+          )}
+          {item.payload.brief && (
+            <p className="mt-2 border-l-2 border-pen pl-3 text-[15px] text-ink-2">
+              <span className="block text-[12px] font-semibold uppercase tracking-wide text-pen">Brief</span>
+              {item.payload.brief}
+            </p>
+          )}
           {item.payload.evidence?.length ? (
             <ul className="mt-3 space-y-1 text-[14px] text-ink-2">
               {item.payload.evidence.map((e, i) => (
@@ -76,8 +114,46 @@ function InboxRow({ item, n, onChange, showCampaignLink }: { item: InboxItem; n:
             </ul>
           ) : null}
           {error && <p className="mt-2 text-sm text-kumkum">{error}</p>}
+          {question && (
+            <form
+              className="mt-4 flex flex-wrap items-center gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (answer.trim()) decide(true, answer.trim());
+              }}
+            >
+              {item.payload.options?.map((o) => (
+                <Button key={o} variant="marker" size="sm" type="button" onClick={() => decide(true, o)} disabled={busy !== null}>
+                  {o}
+                </Button>
+              ))}
+              <input
+                value={answer}
+                onChange={(e) => setAnswer(e.target.value)}
+                placeholder={item.payload.options?.length ? "or type your answer" : "Type your answer"}
+                aria-label={`Answer: ${item.title}`}
+                className="h-8 min-w-0 flex-1 basis-48 rounded-[var(--radius-sm)] bg-surface px-2.5 text-[14px] shadow-[inset_0_0_0_1.5px_var(--color-line-strong)] outline-none focus:shadow-[inset_0_0_0_1.5px_var(--color-ink)]"
+              />
+              <Button variant="primary" size="sm" type="submit" disabled={busy !== null || !answer.trim()} trailing={<PaperPlaneRight size={13} weight="bold" />}>
+                {busy === "approve" ? "Sending…" : "Answer"}
+              </Button>
+            </form>
+          )}
           <div className="mt-4 flex flex-wrap items-center gap-2">
-            {approval ? (
+            {question ? (
+              <Button variant="ghost" size="sm" onClick={() => decide(false)} disabled={busy !== null}>
+                {busy === "decline" ? "Skipping…" : "Skip this question"}
+              </Button>
+            ) : actionable ? (
+              <>
+                <Button variant="primary" onClick={() => decide(true)} disabled={busy !== null} trailing={<Check size={14} weight="bold" />}>
+                  {busy === "approve" ? "Starting…" : item.payload.brief ? "Start this campaign" : "Yes, do it"}
+                </Button>
+                <Button variant="ghost" onClick={() => decide(false)} disabled={busy !== null}>
+                  {busy === "decline" ? "…" : "Not now"}
+                </Button>
+              </>
+            ) : approval ? (
               <>
                 <Button variant="primary" onClick={() => decide(true)} disabled={busy !== null} trailing={<Check size={14} weight="bold" />}>
                   {busy === "approve" ? "Approving…" : "Approve"}
@@ -88,7 +164,7 @@ function InboxRow({ item, n, onChange, showCampaignLink }: { item: InboxItem; n:
               </>
             ) : (
               <Button variant="ghost" size="sm" onClick={() => decide(false)} disabled={busy !== null}>
-                Dismiss
+                {item.kind === "finding" ? "Got it" : "Dismiss"}
               </Button>
             )}
             <span className="flex-1" />

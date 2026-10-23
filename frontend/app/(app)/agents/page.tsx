@@ -1,15 +1,22 @@
 "use client";
 
-import { Brain, CheckCircle, Eye, ImageSquare, PenNib, ShieldCheck, UserCircle, WarningCircle } from "@phosphor-icons/react";
+import { ArrowsClockwise, Brain, ChartLineUp, CheckCircle, Compass, Ear, Eye, ImageSquare, PenNib, ShieldCheck, Tag, Target, Translate, UserCircle, WarningCircle } from "@phosphor-icons/react";
 import clsx from "clsx";
 import { useEffect, useState } from "react";
+import { CheckerTest } from "@/components/checker-test";
 import { Shell } from "@/components/shell";
+import { TeamFeed } from "@/components/team-feed";
 import { PageHeader, SectionHeading, Skeleton, stagger, timeAgo } from "@/components/ui";
 import { useResource } from "@/lib/api";
 import { useBusiness } from "@/lib/business";
 import type { AgentInfo, ModelCall } from "@/lib/types";
 
-const ICON: Record<string, typeof Brain> = { reasoning: Brain, generation: PenNib, verification: ShieldCheck, vision: Eye, image: ImageSquare };
+const ICON: Record<string, typeof Brain> = {
+  orchestrator: Brain, brief: Target, analyst: ChartLineUp, listener: Ear, scout: Compass, offer: Tag, change: ArrowsClockwise, language: Translate, writer: PenNib, verification: ShieldCheck, vision: Eye, image: ImageSquare,
+};
+/** Agents that share a model role (Orchestrator, Offer and Change agents; Writer and Language agent) are told apart by their agent tag. */
+const idOf = (a: { role: string; agent?: string }) => a.agent ?? a.role;
+const callBy = (agents: AgentInfo[], c: ModelCall) => agents.find((a) => a.role === c.role && (!a.agent || a.agent === c.agent));
 const TASK: Record<string, string> = {
   plan: "Deciding the next step",
   draft_offer_facts: "Writing the offer down",
@@ -29,18 +36,40 @@ const TASK: Record<string, string> = {
   evaluate_offer: "Checking the margin",
   publish_assets: "Publishing",
   create_experiment: "Setting up an A/B test",
+  find_opportunities: "Looking for campaign ideas",
+  ask_offer: "Handing the offer to the Offer agent",
+  ask_change: "Handing your change to the Change agent",
+  ask_language: "Handing the wording to the Language agent",
+  translate_offer: "Writing the offer in every language",
+  preview_change: "Working out what the change touches",
+  ask_owner: "Asking you a question",
+  get_menu: "Reading your menu",
   ask_writer: "Handing posts to the Writer",
   ask_checker: "Handing posts to the Checker",
+  ask_brief: "Handing the brief to the Brief agent",
+  ask_analyst: "Handing the results to the Analyst",
+  ask_listener: "Handing reviews to the Customer listener",
+  get_reach: "Checking who you can reach",
+  get_results: "Reading the results",
+  propose_next_move: "Suggesting the next move",
+  get_reviews_to_answer: "Reading reviews that need a reply",
+  draft_replies: "Drafting replies",
+  raise_issue: "Telling you about a problem",
+  suggest_campaign: "Suggesting a follow-up campaign",
 };
 const taskLabel = (t: string | null) => (t ? (TASK[t] ?? t.replace(/_/g, " ")) : "Working");
 
 /** The pipeline every campaign runs through; dots travel along the links while agents work. */
 function Pipeline({ live }: { live: Set<string> }) {
   const nodes = [
-    { role: "reasoning", label: "Orchestrator" },
-    { role: "generation", label: "Writer" },
+    { role: "orchestrator", label: "Orchestrator" },
+    { role: "brief", label: "Brief agent" },
+    { role: "offer", label: "Offer agent" },
+    { role: "language", label: "Language agent" },
+    { role: "writer", label: "Writer" },
     { role: "verification", label: "Checker" },
     { role: "owner", label: "You approve" },
+    { role: "analyst", label: "Analyst" },
   ];
   return (
     <div className="night rise-in overflow-hidden rounded-[var(--radius-lg)] p-6 md:p-8">
@@ -68,7 +97,7 @@ function Pipeline({ live }: { live: Set<string> }) {
         })}
       </ol>
       <p className="mt-6 max-w-[60ch] text-sm text-white/70">
-        The Photo reader works alongside: it reads your photos once so the Writer's posts get a fitting real picture. Nothing reaches customers until you approve it.
+        Once posts are live, the Analyst reads what happened and suggests the next move. The Customer listener reads reviews and comments, drafts replies and suggests follow-ups. The Scout spots what is happening around you and suggests campaigns. When you change a running offer, the Change agent steps in before the Language agent. The Photo reader works alongside: it reads your photos once so the Writer's posts get a fitting real picture. Nothing reaches customers until you approve it.
       </p>
     </div>
   );
@@ -85,11 +114,11 @@ export default function AgentsPage() {
     }, 5000);
     return () => clearInterval(t);
   }, [reload]);
-  const live = new Set((data?.agents ?? []).filter((a) => a.last && now / 1000 - a.last.at < 30).map((a) => a.role));
+  const live = new Set((data?.agents ?? []).filter((a) => a.last && now / 1000 - a.last.at < 30).map(idOf));
 
   return (
     <Shell>
-      <PageHeader title="Your AI team" sub="Five agents, each with one job and its own model. The one that writes a post is never the one that checks it." />
+      <PageHeader title="Your AI team" sub="Twelve agents, each with one job and its own tools. The one that writes a post is never the one that checks it." />
       <Pipeline live={live} />
 
       <div className="mt-12">
@@ -100,11 +129,11 @@ export default function AgentsPage() {
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {data.agents.map((a, i) => {
-                const Icon = ICON[a.role] ?? Brain;
-                const working = live.has(a.role);
+                const Icon = ICON[idOf(a)] ?? Brain;
+                const working = live.has(idOf(a));
                 return (
                   <article
-                    key={a.role}
+                    key={idOf(a)}
                     className={clsx("rise-in flex flex-col rounded-[var(--radius-lg)] p-6 ring-1 transition-shadow duration-500", working ? "bg-surface shadow-[var(--shadow-lift)] ring-pen/40" : "bg-surface shadow-[var(--shadow-soft)] ring-line/80")}
                     style={stagger(i)}
                   >
@@ -153,6 +182,16 @@ export default function AgentsPage() {
             </div>
           )}
 
+          <section className="mt-12" aria-labelledby="checker-h">
+            <SectionHeading id="checker-h" title="Does the checking work?" sub="50 posts that must never reach customers (wrong price, invented date, broken Kannada, a promise the offer never made) and 10 good ones, run through the same checks as every real post." />
+            <CheckerTest slug={business.slug} />
+          </section>
+
+          <section className="mt-12" aria-labelledby="feed-h">
+            <SectionHeading id="feed-h" title="The team at work" sub="Hand-offs between agents, what each one did, and every time the rules or the Checker sent work back. Across all campaigns." />
+            <TeamFeed slug={business.slug} limit={25} />
+          </section>
+
           <section className="mt-12" aria-labelledby="calls-h">
             <SectionHeading id="calls-h" title="Recent model calls" sub="Since the server last started. Backups take over when a model is busy or out of quota. For every step the agents take, switch on Log in the top bar." />
             {data && data.calls.length === 0 ? (
@@ -162,7 +201,7 @@ export default function AgentsPage() {
                 {data?.calls.slice(0, 15).map((c, i) => (
                   <li key={`${c.at}-${i}`} className="flex items-center gap-3 border-b border-line px-5 py-3 text-sm last:border-0">
                     {c.ok ? <CheckCircle size={16} weight="fill" className="shrink-0 text-pen" aria-hidden /> : <WarningCircle size={16} weight="fill" className="shrink-0 text-turmeric" aria-hidden />}
-                    <span className="w-28 shrink-0 font-medium">{data.agents.find((a) => a.role === c.role)?.name ?? c.role}</span>
+                    <span className="w-28 shrink-0 font-medium">{callBy(data.agents, c)?.name ?? c.role}</span>
                     <span className="min-w-0 flex-1 truncate text-ink-2">{c.ok ? taskLabel(c.task) : `Moved on: ${c.error ?? "model unavailable"}`}</span>
                     <span className="hidden font-receipt text-[13px] text-muted sm:inline">{c.model}</span>
                     <span className="w-14 shrink-0 text-right text-[13px] tabular-nums text-muted">{(c.latency_ms / 1000).toFixed(1)}s</span>

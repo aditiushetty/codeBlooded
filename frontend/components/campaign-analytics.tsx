@@ -1,11 +1,12 @@
 "use client";
 
-import { ArrowSquareOut, ArrowsClockwise, InstagramLogo, Lightbulb, PaperPlaneTilt, Sparkle, WhatsappLogo } from "@phosphor-icons/react";
+import { ArrowSquareOut, ArrowsClockwise, ArrowUUpLeft, ChartLineUp, InstagramLogo, Lightbulb, PaperPlaneTilt, Sparkle, WhatsappLogo } from "@phosphor-icons/react";
 import clsx from "clsx";
 import { useState } from "react";
 import { api, useResource } from "@/lib/api";
 import { useBusiness } from "@/lib/business";
 import type { Analytics, Asset, FunnelGroup } from "@/lib/types";
+import { CostLine } from "./effort-cost";
 import { CountUp } from "./motion";
 import { Button, CHANNEL_LABEL, LANG_LABEL, segmentLabel, Skeleton, stagger } from "./ui";
 
@@ -42,7 +43,13 @@ function Funnel({ t }: { t: Analytics["totals"] }) {
       {t.bills > 0 && (
         <p className="col-span-2 bg-surface px-4 py-3 text-[14px] text-ink-2 md:col-span-5 md:px-5">
           <span className="font-semibold text-ink">₹{t.sales.toLocaleString("en-IN")}</span> in sales from {t.bills} redeemed bill{t.bills === 1 ? "" : "s"}
-          {t.average_bill != null && <>, about ₹{t.average_bill.toLocaleString("en-IN")} each</>}. Staff type the bill when they redeem.
+          {t.average_bill != null && <>, about ₹{t.average_bill.toLocaleString("en-IN")} each</>}. Staff type the bill when they redeem, or match your payment statement on the Results page.
+        </p>
+      )}
+      {t.returns > 0 && (
+        <p className="col-span-2 bg-surface px-4 py-3 text-[14px] text-ink-2 md:col-span-5 md:px-5">
+          <span className="font-semibold text-ink">{t.returns}</span> came back for a second visit with a come-back code
+          {t.return_rate != null && <> ({pct(t.return_rate)} of those who redeemed)</>}.
         </p>
       )}
     </div>
@@ -357,9 +364,95 @@ function ChannelNumbers({ data, labels }: { data: Analytics; labels: Record<stri
 }
 
 /** Everything about how this campaign is doing and what to change, in one place. */
+/** The owner asks the Analyst to read the numbers; its suggestion lands in what needs the owner. */
+function AskAnalyst({ campaignId }: { campaignId: string }) {
+  const [state, setState] = useState<"idle" | "busy" | "asked" | string>("idle");
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-y border-line py-3">
+      <ChartLineUp size={20} weight="bold" className="text-pen" aria-hidden />
+      <p className="min-w-0 flex-1 text-[15px] text-ink-2">
+        {state === "asked" ? (
+          <span className="text-pen">The Analyst is reading the results. Its suggestion will appear under what needs you, with the numbers behind it.</span>
+        ) : state !== "idle" && state !== "busy" ? (
+          <span className="text-kumkum">{state}</span>
+        ) : (
+          "The Analyst reads these numbers and the A/B tests, and suggests the next move for you to say yes or no to."
+        )}
+      </p>
+      <Button
+        size="sm"
+        variant="primary"
+        disabled={state === "busy" || state === "asked"}
+        onClick={async () => {
+          setState("busy");
+          try {
+            await api(`/campaigns/${campaignId}/analyst`, { method: "POST" });
+            setState("asked");
+          } catch (e) {
+            setState(e instanceof Error ? e.message : String(e));
+          }
+        }}
+      >
+        {state === "busy" ? "Asking…" : "Ask the Analyst"}
+      </Button>
+    </div>
+  );
+}
+
+/** Come-back codes: a customer whose code is used gets one more for the same offer, for a few days. */
+function ComeBack({ campaignId, repeat, onChange }: { campaignId: string; repeat: NonNullable<Analytics["repeat"]>; onChange: () => void }) {
+  const [busy, setBusy] = useState(false);
+  async function set(days: number | null) {
+    setBusy(true);
+    try {
+      await api(`/campaigns/${campaignId}/return-codes`, { method: "PUT", json: { days } });
+      onChange();
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+      <div>
+        <p className="flex items-center gap-2 text-[16px] font-bold">
+          <ArrowUUpLeft size={18} weight="bold" className="text-pen" aria-hidden /> Come-back codes
+        </p>
+        <p className="mt-1 max-w-[62ch] text-[14px] text-ink-2">
+          {repeat.days
+            ? `Each customer whose code is used gets a second code for the same offer, valid from the next day for ${repeat.days} days. It counts as a return visit, not a new customer.`
+            : "Give each customer whose code is used one more code for the same offer, to bring them back. Off for this campaign."}
+        </p>
+        {repeat.issued > 0 && (
+          <p className="mt-2 text-[14px]">
+            <span className="font-semibold">{repeat.came_back}</span> of {repeat.issued} came back
+            {repeat.rate != null && <> ({pct(repeat.rate)})</>}
+            {repeat.waiting > 0 && <span className="text-muted">; {repeat.waiting} codes still open</span>}
+          </p>
+        )}
+      </div>
+      <label className="flex items-center gap-2 text-[14px] font-semibold">
+        <span>Valid for</span>
+        <select
+          value={repeat.days ?? ""}
+          disabled={busy}
+          onChange={(e) => set(e.target.value ? Number(e.target.value) : null)}
+          className="h-9 rounded-[var(--radius-sm)] bg-surface px-2 shadow-[inset_0_0_0_1.5px_var(--color-line-strong)]"
+        >
+          <option value="">Off</option>
+          {[7, 14, 30].map((d) => (
+            <option key={d} value={d}>
+              {d} days
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
 export function CampaignAnalytics({ campaignId, assets }: { campaignId: string; assets: Asset[] }) {
   const business = useBusiness();
-  const { data, reload } = useResource<Analytics>(`/campaigns/${campaignId}/analytics`, (e) => e.campaign_id === campaignId && (e.type.startsWith("outcome.") || e.type === "assets.published"));
+  const { data, reload } = useResource<Analytics>(`/campaigns/${campaignId}/analytics`, (e) => e.campaign_id === campaignId && (e.type.startsWith("outcome.") || e.type === "assets.published" || e.type === "campaign.return_codes"));
   const [busy, setBusy] = useState(false);
   if (!data) return <Skeleton className="h-72" />;
   const image = Object.fromEntries(assets.map((a) => [a.id, a.image_url]));
@@ -396,7 +489,10 @@ export function CampaignAnalytics({ campaignId, assets }: { campaignId: string; 
       )}
 
       <Funnel t={t} />
+      {data.ai && <CostLine ai={data.ai} />}
+      {t.posts > 0 && <AskAnalyst campaignId={campaignId} />}
       <Tips tips={data.tips} campaignId={campaignId} />
+      {data.repeat && <ComeBack campaignId={campaignId} repeat={data.repeat} onChange={reload} />}
 
       <div className="grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <Trend daily={data.daily.slice(-10)} />

@@ -7,6 +7,7 @@ handed findings and decides what to do about them.
 from datetime import date
 from typing import Any
 
+from app.config import get_settings
 from app.db import Conn, fetch_all, fetch_one
 from app.domain import culture
 from app.services import experiment_status
@@ -105,13 +106,13 @@ async def detect(conn: Conn, business: dict[str, Any], campaign_id: Any | None,
         (business["id"], today, today),
     ):
         name = ev["data"].get("name", ev["key"])
-        fest = next(iter(culture.mentioned(name)), None)
+        fest = next(iter(culture.mentioned(name)), None) if get_settings().festivals else None
         if fest:
             covered.add(fest.key)
         add(3, "event_upcoming", f"{name} starts {ev['period_start']:%a %d %b}.", event=ev["key"],
             festival=fest.key if fest else None)
     # Festivals from the built-in calendar that the business's own events don't already cover.
-    for fest, start, _end, _label in culture.upcoming(today, days=21):
+    for fest, start, _end, _label in culture.upcoming(today, days=21) if get_settings().festivals else []:
         if fest.key not in covered:
             add(3, "event_upcoming", f"{fest.name} starts {max(start, today):%a %d %b}.", event=fest.key,
                 festival=fest.key)
@@ -124,9 +125,15 @@ async def snapshot(conn: Conn, business: dict[str, Any], campaign_id: Any | None
         "business": {"name": business["name"], "locality": business["locality"], "languages": business["languages"]},
         "today": date.today().isoformat(),
         # Festivals in the next month, so the agent can plan around them (greetings and customs are hand-checked).
-        "festivals": [{"key": f.key, "name": f.name, "when": label, "angles": list(f.angles)}
-                      for f, _s, _e, label in culture.upcoming(date.today(), days=30)],
     }
+    from app import moments as moments_mod  # late: moments imports providers
+
+    out["moments"] = [{k: m.get(k) for k in ("title", "when", "source", "hint")} for m in moments_mod.combine(
+        await moments_mod.event_rows(conn, business["id"]), moments_mod.cached_forecast(business["city"]),
+        date.today(), days=10)]
+    if get_settings().festivals:
+        out["festivals"] = [{"key": f.key, "name": f.name, "when": label, "angles": list(f.angles)}
+                            for f, _s, _e, label in culture.upcoming(date.today(), days=30)]
     if campaign_id:
         c = await fetch_one(conn, "select id, name, status, brief, goal, plan, intent from campaigns where id = %s",
                             (campaign_id,))

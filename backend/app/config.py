@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     sarvam_base_url: str = "https://api.sarvam.ai"
     sarvam_stt_model: str = "saaras:v4"
     sarvam_translate_model: str = "mayura:v1"
+    sarvam_tts_model: str = "bulbul:v3"  # bulbul:v2 is deprecated
+    sarvam_tts_speaker: str | None = None  # None = Sarvam's default voice for the language
+
+    # Festival knowledge (domain/culture.py): calendar findings, the writer's Culture block, festival cards and tips.
+    # Off by default since 2026-10-23 (out of the pitch); FESTIVALS=true brings it all back.
+    festivals: bool = False
 
     # Meta: WhatsApp Cloud API and Instagram API with Instagram Login. Each business connects its own number and
     # account (tokens in channel_accounts); these are the app-level values for the webhook.
@@ -106,6 +112,11 @@ class Settings(BaseSettings):
     # Photos of the business itself. Google Places API (New) key for the business's Google Maps photos (optional;
     # website import and uploads work without it).
     google_maps_api_key: SecretStr | None = None
+    # Google Business Profile offer posts: a Google Cloud OAuth client (web) whose project has the Business Profile
+    # APIs enabled. Redirect URI: {PUBLIC_BASE_URL}/api/public/google/callback. Optional: without it the owner gets
+    # the post's fields to paste into business.google.com.
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: SecretStr | None = None
     # When a business has no usable photos yet, fall back to an AI picture (labelled as such in the UI).
     ai_picture_fallback: bool = True
 
@@ -115,11 +126,18 @@ class Settings(BaseSettings):
     public_base_url: str = "http://localhost:3000"
     cors_origins: list[str] = ["http://localhost:3000"]
 
+    # What the AI cost, shown next to what a campaign brought in. Tokens are measured per call (model_calls); the
+    # price is an estimate because free tiers report none: Gemini Flash-Lite's paid list price when this was
+    # written (USD per 1M tokens). Check it before quoting a number.
+    ai_price_in_usd_per_m: float = 0.10
+    ai_price_out_usd_per_m: float = 0.40
+    usd_inr: float = 84.0
+
     # Agent budgets per run.
     agent_max_steps: int = 8
     agent_max_llm_calls: int = 8
-    # Each hand-off to a specialist (Writer, Checker) gets its own, smaller budget.
-    agent_specialist_max_llm_calls: int = 4
+    # Each hand-off to a specialist (Offer agent, Writer, Checker) gets its own, smaller budget.
+    agent_specialist_max_llm_calls: int = 6  # Offer agent: menu, draft, a wording fix, questions, report
     # A whole run (several model calls, posts, pictures) is stopped and reported after this long.
     agent_run_timeout_s: int = 480
     # An AI picture (fallback when a business has no photos) gets this long, then the post goes ahead without one.

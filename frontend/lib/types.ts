@@ -32,10 +32,15 @@ export interface Finding {
 export interface InboxItem {
   id: string;
   campaign_id: string | null;
-  kind: "approval" | "recommendation" | "finding" | "notice";
+  kind: "approval" | "recommendation" | "finding" | "notice" | "question";
   title: string;
   body: string | null;
-  payload: { tool?: string; args?: Record<string, any>; effect?: string; evidence?: string[]; expected_impact?: string };
+  payload: {
+    tool?: string; args?: Record<string, any>; effect?: string; evidence?: string[]; expected_impact?: string;
+    options?: string[]; asked_by?: string;
+    /** Analyst: what the team does on a yes. Customer listener: a ready brief for a follow-up campaign. */
+    instruction?: string; move?: string; brief?: string; items?: string[]; theme?: string;
+  };
   status: string;
   created_at: string;
 }
@@ -191,6 +196,7 @@ export interface CampaignDetail {
   experiments: ExperimentStatus[];
   inbox: InboxItem[];
   culture?: Festival[];
+  effort?: Effort | null;
 }
 
 export interface ResultRow {
@@ -211,7 +217,9 @@ export interface ResultRow {
 }
 export interface Results {
   posts: ResultRow[];
-  totals: { scans: number; claims: number; redeemed: number; sales: number; simulated: number; conversion: number | null };
+  totals: { scans: number; claims: number; redeemed: number; came_back: number; sales: number; simulated: number; conversion: number | null };
+  ai?: AiCost;
+  effort?: { campaigns: number; taps: number; minutes: number; waiting_minutes: number } | null;
 }
 
 export interface Photo {
@@ -239,9 +247,11 @@ export interface ModelCall {
   latency_ms: number;
   error: string | null;
   task: string | null;
+  agent?: string;
 }
 export interface AgentInfo {
   role: string;
+  agent?: string; // set when several agents share a model role
   name: string;
   job: string;
   models: string[];
@@ -284,7 +294,9 @@ export interface Tip {
 }
 
 export interface Analytics {
-  totals: { posts: number; scans: number; claims: number; redeems: number; sales: number; bills: number; average_bill: number | null; claim_rate: number | null; redeem_rate: number | null; conversion: number | null };
+  totals: { posts: number; scans: number; claims: number; redeems: number; returns: number; return_rate: number | null; sales: number; bills: number; average_bill: number | null; claim_rate: number | null; redeem_rate: number | null; conversion: number | null };
+  /** Come-back codes: days valid (null = off), issued after a first visit, used, still open. */
+  repeat?: { days: number | null; issued: number; came_back: number; waiting: number; rate: number | null };
   daily: { date: string; scans: number; claims: number; redeems: number }[];
   hours: { hour: number; scans: number; redeems: number }[];
   by: { channel: FunnelGroup[]; language: FunnelGroup[]; segment: FunnelGroup[] };
@@ -292,12 +304,38 @@ export interface Analytics {
   simulated: number;
   tips: Tip[];
   ratings?: Record<string, { n: number; average: number }>; // stars from verified visits, per post
+  ai?: AiCost;
+  effort?: Effort | null;
   channels?: {
     whatsapp: Record<string, WhatsAppStats>;
     instagram: Record<string, InstagramStats>;
     whatsapp_connected: boolean;
     instagram_connected: boolean;
   };
+}
+
+/** What a campaign (or the business) spent on AI against what came in at the counter. Tokens are measured; ₹ is
+ *  estimated at the list price in the backend settings. */
+export interface AiCost {
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  rupees: number;
+  price: { in_usd_per_m: number; out_usd_per_m: number; usd_inr: number };
+  sales: number;
+  redeems: number;
+  sales_per_ai_rupee: number | null;
+  ai_per_redeem: number | null;
+}
+
+/** The owner's effort from the brief to the first live post (backend domain/effort.py). */
+export interface Effort {
+  live: boolean;
+  taps: number;
+  tap_list: string[];
+  minutes: number;
+  team_minutes: number;
+  waiting_minutes: number;
 }
 
 export interface WhatsAppStats {
@@ -337,4 +375,96 @@ export interface ChannelsStatus {
     contacts: { all: number; reachable: number; free_now: number };
   } | null;
   instagram: { username: string; connected_at: string; posts_linked: number } | null;
+  google: {
+    configured: boolean;
+    account: { display: string | null; connected_at: string; location: string | null; locations: { name: string; title: string; address: string }[] } | null;
+  };
+}
+
+/** A WhatsApp message template drafted from a live post (backend domain/wa_template.py). */
+export interface WaTemplate {
+  id: string;
+  asset_id: string | null;
+  name: string;
+  language: string;
+  category: string;
+  body: string;
+  footer: string | null;
+  example: string[];
+  status: "draft" | "pending" | "approved" | "rejected" | "paused" | "disabled";
+  reason: string | null;
+  submitted_at: string | null;
+  updated_at: string;
+  problems: string[];
+}
+
+export interface GooglePost {
+  post: {
+    languageCode: string;
+    summary: string;
+    event: { title: string; schedule: { startDate?: { year: number; month: number; day: number }; endDate?: { year: number; month: number; day: number } } };
+    offer: { couponCode: string; redeemOnlineUrl: string; termsConditions: string };
+    media?: { sourceUrl: string }[];
+  };
+  problems: string[];
+  configured: boolean;
+  connected: boolean;
+  posted: { name: string; search_url: string | null; state: string | null; created_at: string }[];
+}
+
+export interface Reel {
+  language: Lang;
+  script: string;
+  voice_url: string | null;
+  voice_note: string | null;
+  voice: string | null;
+  headline: string | null;
+  offer: string[];
+  cta: string | null;
+  code: string | null;
+  photos: { url: string; caption: string | null; attribution: string | null; source: string }[];
+}
+
+export interface BillMatch {
+  code: string;
+  amount: number;
+  at: string;
+  how: "code" | "time";
+  gap_min: number | null;
+  row: number;
+  note: string;
+  campaign: string | null;
+}
+export interface BillImport {
+  matches: BillMatch[];
+  unmatched_codes: string[];
+  totals: { payments: number; sales: number; matched: number; matched_sales: number; share: number | null; already_had_bill: number };
+  problems: string[];
+  applied: boolean;
+  redemptions_in_range: number;
+}
+
+/** Something happening around the business soon (backend domain/moments.py). */
+export interface Moment {
+  key: string;
+  kind: "weather" | "calendar" | "event";
+  title: string;
+  starts_on: string;
+  ends_on: string;
+  when: string;
+  detail: string | null;
+  source: string;
+  hint: string | null;
+  removable?: boolean;
+}
+
+/** A Scout agent campaign idea, checked against the moments and the menu. */
+export interface Idea {
+  moment_key: string;
+  title: string;
+  brief: string;
+  audience: string;
+  why: string;
+  items: string[];
+  moment: Moment;
 }

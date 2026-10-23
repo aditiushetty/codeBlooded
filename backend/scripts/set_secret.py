@@ -39,6 +39,7 @@ ALLOWED = {
     "CEREBRAS_API_KEY": "Cerebras API key (cloud.cerebras.ai > API Keys, csk-...)",
     "SARVAM_API_KEY": "Sarvam AI API subscription key (dashboard.sarvam.ai > API Keys)",
     "META_APP_SECRET": "Meta app secret (developers.facebook.com > your app > App settings > Basic > App secret)",
+    "GOOGLE_OAUTH_CLIENT_SECRET": "Google Cloud OAuth client secret (web client; set GOOGLE_OAUTH_CLIENT_ID in .env too)",
     "WHATSAPP_VERIFY_TOKEN": "A phrase of your choice, 8+ characters; type the same one as 'Verify token' in Meta's webhook form",
 }
 # Free backup providers: (models URL, preferred models best first). The first one the key can use is saved too.

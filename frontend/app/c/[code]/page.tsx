@@ -2,6 +2,7 @@
 
 import { MapPin, Storefront } from "@phosphor-icons/react";
 import { use } from "react";
+import { ComeBackCard } from "@/components/come-back";
 import { ReviewForm } from "@/components/review-form";
 import { useClaimStatus } from "@/lib/claim";
 
@@ -53,6 +54,10 @@ export default function CodePage({ params }: { params: Promise<{ code: string }>
           {data.name}, {data.locality}
         </p>
       </div>
+      {data.is_come_back && data.valid_until && !used && (
+        <p className="mt-3 text-center text-[14px] text-ink-2">Valid until {new Date(data.valid_until + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "long" })}</p>
+      )}
+      {used && data.come_back && <ComeBackCard code={data.come_back.code} until={data.come_back.valid_until} language={data.language} />}
       {used && (
         <div className="mt-5">
           <ReviewForm code={data.code} language={data.language} existing={data.review} googleUrl={data.google_review_url} />

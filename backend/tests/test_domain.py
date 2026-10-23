@@ -346,3 +346,131 @@ def test_no_tip_when_the_gap_could_be_luck():
     assert "best_channel" not in {t["kind"] for t in out["tips"]}  # 3 of 8 against 2 of 8 proves nothing
     lo, hi = out["by"]["channel"][0]["likely"]
     assert lo < 0.375 < hi and hi - lo > 0.3  # and the range says so
+
+
+def test_offer_gaps_say_what_a_customer_would_have_to_guess():
+    from datetime import date
+
+    from app.domain.offer import blocking, gaps
+
+    menu = [{"name": "Filter coffee", "price": 40}, {"name": "Masala vada", "price": 30}]
+    today = date(2026, 10, 23)
+    pct = {"key": "discount", "type": "percent", "value": 15, "display": {"en": "15% off"}}
+    coffee = {"key": "item", "type": "item", "value": ["Filter coffee"], "display": {"en": "filter coffee"}}
+    week = {"key": "days", "type": "date_range", "value": ["2026-10-26", "2026-10-30"], "display": {"en": "Mon to Fri"}}
+
+    assert gaps([pct, coffee, week], menu, today=today) == []
+    # "15% off for students": no items, no end date
+    found = gaps([pct], menu, today=today)
+    assert [g["blocks"] for g in found] == [False, True]
+    assert "whole bill" in found[0]["ask"] and "Until which date" in found[1]["ask"]
+    # campaign dates stand in for a date fact
+    assert blocking(gaps([pct, coffee], menu, today=today, starts_on=date(2026, 10, 26), ends_on=date(2026, 10, 30))) == []
+    # nothing to give, an item that is not on the menu, dates in the past, hours that cannot be read
+    bad = gaps([coffee | {"value": ["Cold brew"]}, week | {"value": ["2026-10-01", "2026-10-05"]},
+                {"key": "hours", "type": "time_range", "value": "evenings", "display": {"en": "evenings"}}],
+               menu, today=today)
+    issues = " | ".join(g["issue"] for g in bad)
+    assert all(g["blocks"] for g in bad) and len(bad) == 4
+    assert "does not say what the customer gets" in issues and "Cold brew" in issues
+    assert "already ended" in issues and "HH:MM" in issues
+    assert gaps([pct | {"value": 120}, coffee, week], menu, today=today)[0]["key"] == "discount"
+
+
+def test_day_words_catch_a_fluent_mistranslation():
+    from app.domain.facts import FactSheet, wording_issues
+    from app.domain.language import days_in
+
+    assert days_in("ಸೋಮವಾರದಿಂದ ಶುಕ್ರವಾರದವರೆಗೆ", "kn") == {0, 1, 2, 3, 4}
+    assert days_in("सोमवार से शुक्रवार तक", "hi") == {0, 1, 2, 3, 4}
+    assert days_in("ಈ ಶನಿವಾರ ಮತ್ತು ಭಾನುವಾರ", "kn") == days_in("सप्ताहांत", "hi") == {5, 6}
+    assert days_in("ಸಂಜೆ 4 ರಿಂದ 7", "kn") is None  # names no day: not this check's business
+    # Sarvam, 2026-10-23: "weekday evenings" -> "week evening, Friday evening". Numbers match; days do not.
+    fact = {"key": "when", "label": "When", "type": "text", "value": "weekday evenings",
+            "display": {"en": "weekday evenings", "kn": "ವಾರದ ಸಂಜೆ, ಶುಕ್ರವಾರ ಸಂಜೆ"}}
+    (issue,) = wording_issues(FactSheet(version=1, facts=[fact], forbidden_claims={}))
+    assert issue["lang"] == "kn" and "Fri instead of Mon, Tue, Wed, Thu, Fri" in issue["issue"]
+    fact["display"]["kn"] = "ವಾರದ ದಿನಗಳ ಸಂಜೆ"
+    assert wording_issues(FactSheet(version=1, facts=[fact], forbidden_claims={})) == []
+
+
+def test_change_plan_rewrites_only_posts_whose_own_words_use_the_change():
+    from app.domain.impact import change_plan
+
+    revs = [{"asset_id": "says-days", "fact_keys": ["days", "discount"], "written_keys": ["days"]},
+            {"asset_id": "offer-box-only", "fact_keys": ["days", "discount"], "written_keys": []},
+            {"asset_id": "other", "fact_keys": ["discount"], "written_keys": ["discount"]}]
+    assert change_plan(revs, {"days"}) == {"rewrite": ["says-days"], "refill": ["offer-box-only"], "untouched": ["other"]}
+    assert change_plan(revs, {"days"}, all_if=True)["untouched"] == []
+
+
+def test_moments_come_only_from_real_sources():
+    from datetime import date
+
+    from app.domain import moments
+
+    thu = date(2026, 10, 22)
+    weather = moments.from_weather([{"date": "2026-10-22", "evening_rain_pct": 80, "tmax": 27},
+                                    {"date": "2026-10-23", "evening_rain_pct": 20, "tmax": 34},
+                                    {"date": "2026-10-24", "evening_rain_pct": 30, "tmax": 29}], thu)
+    assert [(m["title"], m["source"]) for m in weather] == [("Rain likely this evening", "Open-Meteo forecast"),
+                                                            ("Hot afternoon tomorrow", "Open-Meteo forecast")]
+    cal = {m["key"]: m for m in moments.calendar(thu)}
+    assert cal["weekend-2026-10-24"]["when"] == "this weekend"
+    assert cal["payday-2026-11"]["starts_on"] == "2026-10-29"
+    rows = [{"key": "own-ipl-final", "period_start": date(2026, 10, 25), "period_end": None,
+             "data": {"name": "IPL final", "note": "7:30 pm", "added_by": "owner"}},
+            {"key": "old", "period_start": date(2026, 10, 1), "period_end": date(2026, 10, 5), "data": {"name": "Gone"}},
+            {"key": "far", "period_start": date(2027, 1, 1), "period_end": None, "data": {"name": "Too far"}}]
+    (ipl,) = moments.from_events(rows, thu)
+    assert ipl["source"] == "You added this" and ipl["removable"] and ipl["detail"] == "7:30 pm"
+    merged = moments.merge(weather, moments.from_events(rows, thu), list(cal.values()))
+    assert [m["starts_on"] for m in merged] == sorted(m["starts_on"] for m in merged)
+
+
+def test_times_and_days_in_a_post_must_fit_the_offer():
+    from app.domain import language
+
+    evening = (16, 19)
+    assert language.time_mismatch("Night coffee break", "en", evening) == ["night"]
+    assert language.time_mismatch("ರಾತ್ರಿಯ ಕಾಫಿ ಬ್ರೇಕ್", "kn", evening) == ["night"]
+    assert language.time_mismatch("नाश्ते के लिए आइए", "hi", evening) == ["breakfast"]
+    assert language.time_mismatch("Evening kaapi after class", "en", evening) == []
+    assert language.time_mismatch("Knightly coffee", "en", evening) == []  # a word, not "night"
+    assert language.time_mismatch("Late night chai", "en", (22, 2)) == []
+
+
+def test_checker_test_rules_catch_most_and_block_no_good_post():
+    from app import checker_eval
+
+    sheet, drafts = checker_eval.load()
+    found = {x["id"]: checker_eval.rules(x, sheet) for x in drafts}
+    r = checker_eval.summarize(drafts, found, live=False, model=None)
+    assert r["bad_total"] == 50 and r["good_total"] == 10
+    assert r["caught"] >= 39 and r["false_alarms"] == 0, r["wrongly_blocked"]
+
+
+def test_owner_effort_counts_taps_and_waiting_time():
+    from datetime import datetime, timedelta
+
+    from app.domain import effort
+
+    t0 = datetime(2026, 10, 24, 10, 0)
+    at = lambda m, s=0: t0 + timedelta(minutes=m, seconds=s)  # noqa: E731
+    ev = [{"type": "campaign.created", "actor": "owner", "created_at": at(0)},
+          {"type": "agent.started", "actor": "agent", "created_at": at(0, 1)},
+          {"type": "question.asked", "actor": "agent", "created_at": at(1)},
+          {"type": "agent.finished", "actor": "agent", "created_at": at(1, 10)},
+          {"type": "approval.decided", "actor": "owner", "created_at": at(6)},  # answered 5 minutes later
+          {"type": "agent.started", "actor": "agent", "created_at": at(6, 1)},
+          {"type": "agent.finished", "actor": "agent", "created_at": at(8)},
+          {"type": "facts.locked", "actor": "owner", "created_at": at(9)},
+          {"type": "asset.approved", "actor": "owner", "created_at": at(12)},
+          {"type": "asset.approved", "actor": "owner", "created_at": at(12, 1)},  # same click
+          {"type": "assets.published", "actor": "owner", "created_at": at(12, 2)},
+          {"type": "outcome.redeem", "actor": "owner", "created_at": at(30)}]  # after live: not effort
+    e = effort.summarize(ev)
+    assert e and e["live"] and e["taps"] == 4 and e["minutes"] == 12.0
+    assert e["waiting_minutes"] == 5.0 and 3 < e["team_minutes"] < 3.5
+    assert effort.typical([e, {**e, "taps": 6, "minutes": 20.0}]) == {"campaigns": 2, "taps": 5.0, "minutes": 16.0,
+                                                                      "waiting_minutes": 5.0}
