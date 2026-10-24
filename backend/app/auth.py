@@ -109,12 +109,40 @@ async def sign_up(email: str, password: str) -> dict[str, Any]:
     return await sign_in(email, password)
 
 
+async def _user_id(email: str) -> str | None:
+    """The account id for an email, through the admin API."""
+    async with httpx.AsyncClient(timeout=15) as c:
+        for page in range(1, 21):
+            r = await c.get(f"{_base()}/admin/users", headers=_admin_headers(),
+                            params={"filter": email, "page": page, "per_page": 100})
+            users = r.json().get("users") or [] if r.status_code == 200 else []
+            if hit := next((u["id"] for u in users if (u.get("email") or "").lower() == email.lower()), None):
+                return hit
+            if len(users) < 100:
+                return None
+    return None
+
+
 async def sign_in_or_create(email: str, password: str) -> dict[str, Any]:
-    """Sign in, creating the account first if it does not exist (the shared demo login)."""
+    """Sign in, creating the account first if it does not exist (the shared demo login only).
+
+    Each server has its own DEMO_PASSWORD (a laptop and the deployed API usually differ, and Render generates one),
+    while the account lives once in Supabase. When it exists with another password, it is set to this server's:
+    the demo login is public and opens only the demo business."""
     try:
         return await sign_in(email, password)
     except AuthError:
+        pass
+    try:
         return await sign_up(email, password)
+    except AuthError as e:
+        if "already exists" not in str(e) or not (uid := await _user_id(email)):
+            raise
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.put(f"{_base()}/admin/users/{uid}", headers=_admin_headers(), json={"password": password})
+    if r.status_code >= 400:
+        raise AuthError(_message(r))
+    return await sign_in(email, password)
 
 
 async def sign_out(access_token: str) -> None:
