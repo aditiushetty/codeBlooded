@@ -55,9 +55,33 @@ function GuardSummary({ v }: { v: Validation | null }) {
   );
 }
 
+/** Wait until every photo inside the post has loaded and decoded, and the fonts are ready. Returns false when a
+ *  photo failed to load, so a post is never sent with an empty space where its photo should be. */
+async function settle(node: HTMLElement) {
+  const imgs = Array.from(node.querySelectorAll("img"));
+  await Promise.all(
+    imgs.map((img) =>
+      img.complete
+        ? null
+        : new Promise((done) => {
+            img.addEventListener("load", done, { once: true });
+            img.addEventListener("error", done, { once: true });
+            setTimeout(done, 10_000);
+          }),
+    ),
+  );
+  await Promise.all(imgs.map((img) => (img.naturalWidth ? img.decode().catch(() => {}) : null)));
+  await document.fonts?.ready;
+  return imgs.every((img) => img.naturalWidth > 0);
+}
+
 async function renderPng(node: HTMLElement) {
+  if (!(await settle(node))) throw new Error("The post's photo did not load, so it was not drawn. Reload the page and try again.");
   const { toBlob } = await import("html-to-image");
-  const blob = await toBlob(node, { pixelRatio: Math.max(2, 1080 / node.offsetWidth), cacheBust: true });
+  const opts = { pixelRatio: Math.max(2, 1080 / node.offsetWidth), cacheBust: true };
+  // html-to-image often leaves photos out of its first drawing (they are still being embedded); the second has them.
+  await toBlob(node, opts);
+  const blob = await toBlob(node, opts);
   if (!blob) throw new Error("Could not render the image.");
   return blob;
 }
@@ -73,10 +97,12 @@ async function toJpeg(png: Blob) {
   return canvas.toDataURL("image/jpeg", 0.9);
 }
 
-/** Post a live Instagram post exactly as drawn on its card (found by `data-post`), from anywhere on the page. */
+/** Post a live Instagram post exactly as drawn on its card (found by `data-post`), from anywhere on the page. Only
+ *  the square picture goes (`data-capture`): Instagram shows the caption and hashtags under it by itself. */
 export async function postToInstagram(assetId: string) {
-  const node = document.querySelector<HTMLElement>(`[data-post="${assetId}"]`);
-  if (!node) throw new Error("Show this post in the Posts section above (pick “All”), then try again.");
+  const card = document.querySelector<HTMLElement>(`[data-post="${assetId}"]`);
+  if (!card) throw new Error("Show this post in the Posts section above (pick “All”), then try again.");
+  const node = card.querySelector<HTMLElement>("[data-capture]") ?? card;
   const data_url = await toJpeg(await renderPng(node));
   return api<{ media_id: string; permalink: string | null }>(`/assets/${assetId}/instagram/publish`, { method: "POST", json: { data_url } });
 }

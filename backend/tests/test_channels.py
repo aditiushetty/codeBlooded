@@ -21,9 +21,13 @@ class FakeMeta:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, dict]] = []
         self.n = 0
+        self.deleted: set[str] = set()  # media ids the owner deleted in Instagram
 
     async def __call__(self, method, url, *, token, params=None, json=None, bearer=True):
         self.calls.append((method, url, {**(params or {}), **(json or {})}))
+        if url.rsplit("/", 1)[-1] in self.deleted:
+            raise meta.MetaError(f"Object with ID '{url.rsplit('/', 1)[-1]}' does not exist, cannot be loaded due to "
+                                 "missing permissions, or does not support this operation")
         if url.endswith("/1234567890") and method == "GET":
             return {"display_phone_number": "+1 555 010 0000", "verified_name": "Kaapi Kone"}
         if url.endswith("/messages"):
@@ -187,6 +191,15 @@ async def test_instagram_publish_and_engagement(client, fake_meta, monkeypatch):
     assert made[2]["image_url"].startswith("https://example.trycloudflare.com/files/instagram/")
     assert f"Show code {post} at the counter." in made[2]["caption"]  # the counter can credit Instagram
     assert (await client.post(f"/api/assets/{asset_id}/instagram/publish", json={"data_url": jpeg})).status_code == 409
+    # The owner deleted it in Instagram (a bad picture, say): it may go again, and the earlier record is replaced.
+    async with connection() as conn:
+        await conn.execute("update instagram_media set media_id = '9000' where media_id = '9001'")
+    fake_meta.deleted.add("9000")
+    r = await client.post(f"/api/assets/{asset_id}/instagram/publish", json={"data_url": jpeg})
+    assert r.status_code == 200, r.text
+    async with connection() as conn:
+        rows = await (await conn.execute("select media_id from instagram_media where asset_id = %s", (asset_id,))).fetchall()
+    assert [r["media_id"] for r in rows] == ["9001"]
 
     assert (await client.post("/api/businesses/kaapi-kone/instagram/sync")).json()["updated"] == 1
     async with connection() as conn:

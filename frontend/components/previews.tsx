@@ -30,9 +30,9 @@ function Watermark({ name }: { name?: string }) {
   );
 }
 
-function Picture({ url, className, children, mark }: { url: string | null; className?: string; children?: ReactNode; mark?: string }) {
+function Picture({ url, className, children, mark, capture }: { url: string | null; className?: string; children?: ReactNode; mark?: string; capture?: boolean }) {
   return (
-    <div className={clsx("relative overflow-hidden bg-[radial-gradient(120%_90%_at_20%_15%,#3a3830_0%,#16150f_70%)]", className)}>
+    <div data-capture={capture || undefined} className={clsx("relative overflow-hidden bg-[radial-gradient(120%_90%_at_20%_15%,#3a3830_0%,#16150f_70%)]", className)}>
       {url && <img src={url} alt="" className="absolute inset-0 h-full w-full object-cover" crossOrigin="anonymous" />}
       {url && <Watermark name={mark} />}
       {children}
@@ -72,7 +72,7 @@ function Brand({ name }: { name: string }) {
 export function InstagramPost({ r, image, business, code }: { r: Rendered; image: string | null; business: string; code: string | null }) {
   return (
     <div className="bg-white">
-      <Picture url={image} mark={business} className="@container aspect-square w-full">
+      <Picture url={image} mark={business} capture className="@container aspect-square w-full">
         <div className="absolute inset-0 flex flex-col justify-between bg-[linear-gradient(180deg,rgba(0,0,0,0.42)_0%,rgba(0,0,0,0)_34%,rgba(0,0,0,0)_52%,rgba(0,0,0,0.6)_100%)] p-[5cqw]">
           <div className="space-y-[3cqw]">
             <Brand name={business} />

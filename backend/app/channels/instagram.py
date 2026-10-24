@@ -104,11 +104,21 @@ async def _publish(business: dict[str, Any], asset_id: str, jpeg: bytes) -> dict
         asset = await services.get_asset(conn, asset_id)
         if asset["status"] != "live":
             raise services.Conflict("Approve the post first.")
-        if await fetch_one(conn, "select 1 from instagram_media where asset_id = %s", (asset["id"],)):
-            raise services.Conflict("This post is already on Instagram.")
+        earlier = await fetch_one(conn, "select media_id from instagram_media where asset_id = %s", (asset["id"],))
         tp = await fetch_one(conn, "select code from touchpoints where asset_id = %s", (asset["id"],))
         rev = await services.current_revision(conn, asset["id"])
     acct = await refresh_if_due(acct)
+    if earlier:
+        # Posted before. If the owner deleted it on Instagram (say, to replace a bad picture), it may go again.
+        try:
+            await _get(acct, earlier["media_id"], fields="id")
+        except meta.MetaError as e:
+            if "does not exist" not in str(e):  # Meta busy or refusing: never risk posting it twice
+                raise
+            async with connection() as conn:
+                await conn.execute("delete from instagram_media where media_id = %s", (earlier["media_id"],))
+        else:
+            raise services.Conflict("This post is already on Instagram. To post it again, delete it in Instagram first.")
     key = f"instagram/{asset['id']}-{rev['n'] if rev else 0}.jpg"
     store = get_storage()
     s = get_settings()
