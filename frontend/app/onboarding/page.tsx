@@ -3,7 +3,7 @@
 import { ArrowLeft, ArrowRight, Check, GoogleLogo, Globe, LinkSimple, Plus, SealCheck, Sparkle, Trash, UploadSimple } from "@phosphor-icons/react";
 import clsx from "clsx";
 import { useEffect, useState } from "react";
-import { SayMenu } from "@/components/say-menu";
+import { MenuPhoto, SayMenu, type HeardItem } from "@/components/say-menu";
 import { Button } from "@/components/ui";
 import { api } from "@/lib/api";
 import { rememberBusiness } from "@/lib/business";
@@ -89,6 +89,13 @@ export default function Onboarding() {
       .then((m) => setGoogleOn(!!m.features?.google_photos))
       .catch(() => {});
   }, []);
+
+  function addHeard(heard: HeardItem[]) {
+    setItems((cur) => [
+      ...cur.filter((x) => x.name.trim() || x.price),
+      ...heard.filter((h) => !cur.some((x) => x.name.trim().toLowerCase() === h.name.toLowerCase())).map((h) => ({ name: h.name, price: String(h.price), cost: "" })),
+    ]);
+  }
 
   const finalKind = kind === "Other" ? otherKind.trim() : kind;
   const goodItems = items.filter((i) => i.name.trim() && Number(i.price) > 0);
@@ -224,7 +231,18 @@ export default function Onboarding() {
               {error}
             </p>
           )}
-          <button type="button" onClick={() => { setError(null); setMode("steps"); }} className="press mt-8 text-[15px] font-semibold underline decoration-ink/30 underline-offset-4 hover:decoration-ink">
+          <div className="mt-8">
+            <MenuPhoto
+              onItems={(heard) => {
+                if (!heard.length) return;
+                addHeard(heard);
+                setNotes([`Read ${heard.length} item${heard.length === 1 ? "" : "s"} from your menu photo. Check each price, then fill in your name and area.`]);
+                setError(null);
+                setMode("review");
+              }}
+            />
+          </div>
+          <button type="button" onClick={() => { setError(null); setMode("steps"); }} className="press mt-2 text-[15px] font-semibold underline decoration-ink/30 underline-offset-4 hover:decoration-ink">
             No website? Type it in yourself
           </button>
         </div>
@@ -346,16 +364,10 @@ export default function Onboarding() {
           {show(2) && (
             <div className="mt-8">
               <p className="mb-5 text-[15px] text-ink-2">Offers can only use these items and prices, so nothing is ever made up. Cost is optional; with it, Counterpart checks every discount still makes money.</p>
-              <SayMenu
-                onItems={(heard) =>
-                  setItems((cur) => [
-                    ...cur.filter((x) => x.name.trim() || x.price),
-                    ...heard
-                      .filter((h) => !cur.some((x) => x.name.trim().toLowerCase() === h.name.toLowerCase()))
-                      .map((h) => ({ name: h.name, price: String(h.price), cost: "" })),
-                  ])
-                }
-              />
+              <div className="grid gap-x-4 md:grid-cols-2">
+                <SayMenu onItems={addHeard} />
+                <MenuPhoto onItems={addHeard} />
+              </div>
               <div className="space-y-3">
                 <div className="hidden grid-cols-[1fr_110px_110px_40px] gap-2 px-1 text-[13px] text-muted sm:grid">
                   <span>Item or service</span>

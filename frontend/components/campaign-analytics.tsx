@@ -9,6 +9,7 @@ import type { Analytics, Asset, FunnelGroup } from "@/lib/types";
 import { CostLine } from "./effort-cost";
 import { CountUp } from "./motion";
 import { Button, CHANNEL_LABEL, LANG_LABEL, segmentLabel, Skeleton, stagger } from "./ui";
+import { MIN_REACH } from "./instagram-overview";
 
 const pct = (x: number | null | undefined, d = 0) => (x == null ? "–" : `${(x * 100).toFixed(x < 0.1 && x > 0 ? 1 : d)}%`);
 
@@ -131,35 +132,49 @@ function Trend({ daily }: { daily: Analytics["daily"] }) {
   );
 }
 
-/** Link opens by hour of day, all 24 hours, busiest hour in the strong colour. */
-function Hours({ hours }: { hours: Analytics["hours"] }) {
-  const max = Math.max(1, ...hours.map((h) => h.scans));
-  const total = hours.reduce((n, h) => n + h.scans, 0);
-  const peak = [...hours].sort((a, b) => b.scans - a.scans)[0];
+/** When customers were active (link opens, claims, visits at the counter, Instagram comments), by hour of day.
+ *  All 24 hours always show; with nothing for this campaign yet, the whole business's last 60 days stand in. */
+export function Hours({ hours, overall }: { hours: Analytics["hours"]; overall?: Analytics["hours_overall"] }) {
+  const own = hours.some((h) => h.active > 0);
+  const shown: { hour: number; active: number; detail?: string }[] = own
+    ? hours.map((h) => ({
+        hour: h.hour,
+        active: h.active,
+        detail: [h.scans && `${h.scans} opened`, h.claims && `${h.claims} claimed`, h.redeems && `${h.redeems} came in`, h.comments && `${h.comments} commented`].filter(Boolean).join(", "),
+      }))
+    : overall ?? Array.from({ length: 24 }, (_, hour) => ({ hour, active: 0 }));
+  const max = Math.max(1, ...shown.map((h) => h.active));
+  const total = shown.reduce((n, h) => n + h.active, 0);
+  const peak = [...shown].sort((a, b) => b.active - a.active)[0];
   const at = (h: number) => `${h % 12 || 12} ${h < 12 ? "am" : "pm"}`;
   return (
     <div>
       <p className="text-[16px] font-bold">Best time to post</p>
       <p className="text-[14px] text-ink-2">
-        {peak.scans ? `Most opens around ${at(peak.hour)} (${peak.scans} of ${total}). Share about an hour before.` : "Shows once people open links."}
+        {!total
+          ? "Fills in as customers open links, claim codes, come in or comment."
+          : `${own ? "" : "Across all your campaigns: "}customers were most active around ${at(peak.hour)} (${peak.active} of ${total}). ${total < 10 ? "Still early; a few more days make this surer." : "Share about an hour before."}`}
       </p>
-      <div className="mt-4 flex h-32 items-end gap-[2px] border-b border-ink" role="img" aria-label={hours.map((h) => `${at(h.hour)}: ${h.scans} opened`).join("; ")}>
-        {hours.map((h) => (
-          <div
-            key={h.hour}
-            title={`${at(h.hour)}: ${h.scans} opened, ${h.redeems} redeemed`}
-            className={clsx("min-w-0 flex-1 rounded-t-[2px]", h.hour === peak.hour && peak.scans ? "bg-pen" : "bg-pen-soft ring-1 ring-inset ring-pen/30")}
-            style={{ height: `${(h.scans / max) * 100}%`, minHeight: h.scans ? 2 : 0 }}
-          />
-        ))}
+      <div className="relative mt-4">
+        <div className="flex h-32 items-end gap-[2px] border-b border-ink" role="img" aria-label={shown.map((h) => `${at(h.hour)}: ${h.active}`).join("; ")}>
+          {shown.map((h) => (
+            <div
+              key={h.hour}
+              title={`${at(h.hour)}: ${h.active ? h.detail || `${h.active} active` : "nothing yet"}`}
+              className={clsx("min-w-0 flex-1 rounded-t-[2px]", h.active && h.hour === peak.hour ? "bg-pen" : h.active ? "bg-pen-soft ring-1 ring-inset ring-pen/30" : "bg-line/60")}
+              style={{ height: h.active ? `${(h.active / max) * 100}%` : 3 }}
+            />
+          ))}
+        </div>
+        <div className="relative mt-1 h-4 text-[11px] text-muted" aria-hidden>
+          {[0, 6, 12, 18].map((h) => (
+            <span key={h} className="absolute -translate-x-1/2" style={{ left: `${((h + 0.5) / 24) * 100}%` }}>
+              {h === 0 ? "12 am" : h === 12 ? "noon" : at(h)}
+            </span>
+          ))}
+        </div>
       </div>
-      <div className="relative mt-1 h-4 text-[11px] text-muted" aria-hidden>
-        {[0, 6, 12, 18].map((h) => (
-          <span key={h} className="absolute -translate-x-1/2" style={{ left: `${((h + 0.5) / 24) * 100}%` }}>
-            {h === 0 ? "12 am" : h === 12 ? "noon" : at(h)}
-          </span>
-        ))}
-      </div>
+      <p className="mt-2 text-[12px] text-muted">Counts link opens, claimed codes, visits at the counter and Instagram comments, in Indian time.</p>
     </div>
   );
 }
@@ -186,7 +201,7 @@ function Breakdown({ title, dim, rows }: { title: string; dim: "channel" | "lang
             <div className="flex items-baseline justify-between gap-2 text-[14px]">
               <span className="truncate font-semibold">{LABEL[dim](r.key)}</span>
               <span className="shrink-0 tabular-nums text-ink-2">
-                {r.redeems} of {r.scans} · <span className="font-semibold text-ink">{pct(r.conversion)}</span>
+                {r.from_link} of {r.scans} · <span className="font-semibold text-ink">{pct(r.conversion)}</span>
               </span>
             </div>
             <div className="relative mt-1.5 h-2 rounded-full bg-sunken">
@@ -267,7 +282,7 @@ function ChannelNumbers({ data, labels }: { data: Analytics; labels: Record<stri
   }
   const n = (x?: number) => (x == null ? "–" : x.toLocaleString("en-IN"));
   return (
-    <div className="grid grid-cols-1 gap-10 lg:grid-cols-2">
+    <div className={clsx("grid grid-cols-1 gap-10", ig.length > 0 && wa.length > 0 && "lg:grid-cols-2")}>
       {ig.length > 0 && (
         <div>
           <div className="flex items-center justify-between">
@@ -294,9 +309,10 @@ function ChannelNumbers({ data, labels }: { data: Analytics; labels: Record<stri
           <table className="mt-2 w-full border-t border-ink text-[14px]">
             <thead>
               <tr className="border-b border-ink text-right text-[12px] text-muted">
-                <th className="py-1.5 text-left font-semibold">Post</th>
+                <th className="w-[38%] py-1.5 text-left font-semibold">Post</th>
                 <th className="py-1.5 font-semibold">Reached</th>
                 <th className="hidden py-1.5 font-semibold sm:table-cell">Likes</th>
+                <th className="hidden py-1.5 font-semibold sm:table-cell">Comments</th>
                 <th className="hidden py-1.5 font-semibold sm:table-cell">Saves</th>
                 <th className="hidden py-1.5 font-semibold sm:table-cell">Shares</th>
                 <th className="py-1.5 font-semibold">Engagement</th>
@@ -312,9 +328,12 @@ function ChannelNumbers({ data, labels }: { data: Analytics; labels: Record<stri
                   </td>
                   <td className="py-2">{n(m.reach)}</td>
                   <td className="hidden py-2 sm:table-cell">{n(m.likes)}</td>
+                  <td className="hidden py-2 sm:table-cell">{n(m.comments)}</td>
                   <td className="hidden py-2 sm:table-cell">{n(m.saved)}</td>
                   <td className="hidden py-2 sm:table-cell">{n(m.shares)}</td>
-                  <td className="py-2 font-semibold text-pen">{m.metrics_at ? pct(m.engagement_rate, 1) : "waiting"}</td>
+                  <td className="py-2 font-semibold text-pen">
+                    {!m.metrics_at ? "waiting" : (m.reach ?? 0) < MIN_REACH ? <span className="font-normal text-muted" title={`Shown once ${MIN_REACH} accounts are reached; with fewer, one like swings it wildly`}>too few yet</span> : pct(m.engagement_rate, 1)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -496,7 +515,7 @@ export function CampaignAnalytics({ campaignId, assets }: { campaignId: string; 
 
       <div className="grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <Trend daily={data.daily.slice(-10)} />
-        <Hours hours={data.hours} />
+        <Hours hours={data.hours} overall={data.hours_overall} />
       </div>
 
       {t.scans > 0 && (

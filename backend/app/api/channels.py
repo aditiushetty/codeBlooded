@@ -4,6 +4,7 @@ import base64
 import binascii
 import hmac
 from typing import Any
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
@@ -23,6 +24,17 @@ webhook = APIRouter(prefix="/api/public")
 
 def _meta_error(e: meta.MetaError) -> services.Conflict:
     return services.Conflict(f"Meta said: {e}")
+
+
+async def _not_taken(conn: Any, business_id: Any, channel: str, external_id: str, what: str) -> None:
+    """One WhatsApp number or Instagram account belongs to one business (incoming messages and comments are routed
+    by it), so connecting it to a second business is refused with a reason instead of a database error."""
+    other = await fetch_one(conn, """select b.name from channel_accounts ca join businesses b on b.id = ca.business_id
+                                     where ca.channel = %s and ca.external_id = %s and ca.business_id <> %s""",
+                            (channel, external_id, business_id))
+    if other:
+        raise services.Conflict(f"This {what} is already connected to {other['name']}. "
+                                "Disconnect it there first, or use a different one for this business.")
 
 
 @channels_api.get("/businesses/{slug}/channels")
@@ -46,6 +58,8 @@ async def channels_status(user: CurrentUser, slug: str) -> dict[str, Any]:
         "public_url": base, "public_ok": base.startswith("https://"),
         "webhook": {"url": f"{base}/api/public/whatsapp/webhook", "verify_token_set": s.whatsapp_verify_token is not None,
                     "app_secret_set": s.meta_app_secret is not None, "last_message_at": last_in and last_in["at"]},
+        "instagram_webhook": {"url": f"{base}/api/public/instagram/webhook",
+                              "secret_set": (s.instagram_app_secret or s.meta_app_secret) is not None},
         "whatsapp": wa and {"display": wa["display"], "phone_number_id": wa["external_id"],
                             "template": (wa["meta"] or {}).get("template"), "connected_at": wa["connected_at"],
                             "contacts": contacts},
@@ -77,6 +91,7 @@ async def connect_whatsapp(user: CurrentUser, slug: str, body: WhatsAppConnect) 
         raise _meta_error(e) from e
     template = {"name": body.template, "language": body.template_language} if body.template else None
     async with connection() as conn:
+        await _not_taken(conn, b["id"], "whatsapp", body.phone_number_id, "WhatsApp number")
         await conn.execute(
             """insert into channel_accounts (business_id, channel, external_id, display, token, meta)
                values (%s, 'whatsapp', %s, %s, %s, %s)
@@ -100,6 +115,7 @@ async def connect_instagram(user: CurrentUser, slug: str, body: InstagramConnect
     except meta.MetaError as e:
         raise _meta_error(e) from e
     async with connection() as conn:
+        await _not_taken(conn, b["id"], "instagram", info["user_id"], "Instagram account")
         await conn.execute(
             """insert into channel_accounts (business_id, channel, external_id, display, token, token_expires_at)
                values (%s, 'instagram', %s, %s, %s, now() + interval '60 days')
@@ -108,7 +124,22 @@ async def connect_instagram(user: CurrentUser, slug: str, body: InstagramConnect
                  token_expires_at = excluded.token_expires_at""",
             (b["id"], info["user_id"], f"@{info['username']}", body.token.strip()))
         await ledger.record(conn, b["id"], "channel.connected", f"Instagram connected: @{info['username']}", actor="owner")
+        acct = await instagram.account(conn, b["id"])
+    try:  # DMs and comments as they happen; without it comments are still read on the watch's pace
+        await instagram.subscribe(acct)
+    except meta.MetaError:
+        pass
     return {"ok": True, **info}
+
+
+@channels_api.post("/assets/{asset_id}/instagram/code-line")
+async def instagram_code_line(user: CurrentUser, asset_id: str) -> dict[str, Any]:
+    """An older post gets "Comment CODE" as the business's own comment (Instagram captions cannot be edited)."""
+    b = await _business_of_asset(user, asset_id)
+    try:
+        return await instagram.add_code_line(b, asset_id)
+    except meta.MetaError as e:
+        raise _meta_error(e) from e
 
 
 @channels_api.delete("/businesses/{slug}/channels/{channel}")
@@ -295,6 +326,17 @@ async def instagram_link(user: CurrentUser, asset_id: str, body: LinkBody) -> di
     return out
 
 
+@channels_api.get("/businesses/{slug}/instagram/overview")
+async def instagram_overview(user: CurrentUser, slug: str, refresh: bool = False) -> dict[str, Any]:
+    async with connection() as conn:
+        b = await business_for(conn, user, slug)
+    try:
+        data = await instagram.overview(b, force=refresh)
+    except meta.MetaError as e:
+        raise _meta_error(e) from e
+    return {"connected": data is not None, **(data or {})}
+
+
 @channels_api.post("/businesses/{slug}/instagram/sync")
 async def instagram_sync(user: CurrentUser, slug: str, request: Request) -> dict[str, Any]:
     """Re-read insights and read new comments now."""
@@ -310,14 +352,37 @@ async def instagram_sync(user: CurrentUser, slug: str, request: Request) -> dict
 # ------------------------------------------------------------------ WhatsApp webhook (called by Meta)
 
 
-@webhook.get("/whatsapp/webhook")
-async def whatsapp_verify(request: Request) -> Response:
-    """Meta's one-time handshake when the webhook URL is saved in the app dashboard."""
+def _handshake(request: Request) -> Response:
+    """Meta's one-time handshake when a webhook URL is saved in the app dashboard (same verify token for both)."""
     q = request.query_params
     want = get_settings().whatsapp_verify_token
     if q.get("hub.mode") == "subscribe" and want and hmac.compare_digest(q.get("hub.verify_token", ""), want.get_secret_value()):
         return Response(q.get("hub.challenge", ""), media_type="text/plain")
     raise HTTPException(403, "verification failed")
+
+
+@webhook.get("/whatsapp/webhook")
+async def whatsapp_verify(request: Request) -> Response:
+    return _handshake(request)
+
+
+@webhook.get("/instagram/webhook")
+async def instagram_verify(request: Request) -> Response:
+    return _handshake(request)
+
+
+@webhook.post("/instagram/webhook")
+async def instagram_events(request: Request, bg: BackgroundTasks) -> dict[str, str]:
+    """DMs and new comments on a connected Instagram account. Signed by Meta; answered at once, processed after."""
+    raw = await request.body()
+    if not instagram.signature_ok(raw, request.headers.get("x-hub-signature-256")):
+        raise HTTPException(403, "bad signature")
+    try:
+        payload = await request.json()
+    except ValueError as e:
+        raise HTTPException(400, "not json") from e
+    bg.add_task(instagram.handle, payload, get_router(request))
+    return {"ok": "received"}
 
 
 @webhook.post("/whatsapp/webhook")
@@ -332,6 +397,31 @@ async def whatsapp_events(request: Request, bg: BackgroundTasks) -> dict[str, st
         raise HTTPException(400, "not json") from e
     bg.add_task(whatsapp.handle, payload, get_router(request))
     return {"ok": "received"}
+
+
+@webhook.post("/meta/data-deletion")
+async def meta_data_deletion(request: Request) -> dict[str, str]:
+    """Meta's Deauthorize and Data deletion request callbacks (same URL for both). Form body `signed_request`."""
+    s = get_settings()
+    form = parse_qs((await request.body()).decode(errors="replace"))
+    secrets = [k.get_secret_value() for k in (s.instagram_app_secret, s.meta_app_secret) if k is not None]
+    data = meta.signed_request((form.get("signed_request") or [""])[0], *secrets)
+    if not data or not data.get("user_id"):
+        raise HTTPException(400, "bad signed_request")
+    code = await instagram.forget(str(data["user_id"])) or "NOTHING-STORED"
+    return {"url": f"{s.public_base_url.rstrip('/')}/data-deletion?code={code}", "confirmation_code": code}
+
+
+@webhook.get("/meta/data-deletion/{code}")
+async def meta_data_deletion_status(code: str) -> dict[str, Any]:
+    if code == "NOTHING-STORED":
+        return {"code": code, "status": "done", "note": "Nothing was stored for this account."}
+    async with connection() as conn:
+        row = await fetch_one(conn, """select created_at from ledger_events where type = 'channel.data_deleted'
+                                       and payload->>'confirmation' = %s""", (code.upper(),))
+    if not row:
+        raise services.NotFound("No deletion request has this code.")
+    return {"code": code.upper(), "status": "done", "deleted_at": row["created_at"]}
 
 
 # ------------------------------------------------------------------ Google Business Profile

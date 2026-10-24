@@ -32,6 +32,7 @@
   --color-kumkum: #c2361b;
   --color-kumkum-soft: #fae1d9;
   --color-receipt: #fffffb;
+  --color-leaf: #2e7d4f; /* status dots only: a key or connection that works */
   /* Accent printed on posts; each business theme overrides it (lib/theme.ts). */
   --color-brand: #16150f;
 

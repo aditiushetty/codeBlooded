@@ -1,6 +1,6 @@
 "use client";
 
-import { Microphone, Stop } from "@phosphor-icons/react";
+import { Camera, Microphone, Stop } from "@phosphor-icons/react";
 import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
@@ -162,6 +162,54 @@ export function SayMenu({ onItems }: { onItems: (items: HeardItem[]) => void }) 
           {busy ? "Reading the items…" : listening ? `Stop${sarvam ? ` (${MAX_SECONDS - seconds}s)` : ""}` : "Start speaking"}
         </button>
       </div>
+      {note && <p className="mt-2 text-[14px] text-ink-2">{note}</p>}
+    </div>
+  );
+}
+
+/** Shrink a phone photo before it is sent; menus stay readable at this size. */
+async function photoDataUrl(file: File, max = 1800): Promise<string> {
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const canvas = Object.assign(document.createElement("canvas"), { width: Math.round(bmp.width * scale), height: Math.round(bmp.height * scale) });
+  canvas.getContext("2d")!.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.88);
+}
+
+/** "Photo of your menu": the printed menu or rate card is read by the vision model; every price is marked for the
+ *  owner to check, because a photo cannot be checked against text. */
+export function MenuPhoto({ onItems }: { onItems: (items: HeardItem[]) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  async function read(files: FileList | null) {
+    if (!files?.length) return;
+    setBusy(true);
+    setNote(null);
+    let added = 0;
+    try {
+      for (const f of Array.from(files).slice(0, 4)) {
+        const out = await api<{ items: HeardItem[] }>("/onboarding/menu-photo", { method: "POST", json: { data_url: await photoDataUrl(f) } });
+        onItems(out.items);
+        added += out.items.length;
+      }
+      setNote(added ? `Read ${added} item${added === 1 ? "" : "s"} from the photo. Check each price below before you save.` : "No item with a clear price was found. Try a sharper, straight-on photo.");
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mb-6 rounded-[var(--radius-md)] bg-surface p-4 ring-1 ring-line-strong">
+      <p className="text-[15px] font-semibold">Or take a photo of your menu</p>
+      <p className="mt-0.5 text-[14px] text-ink-2">A printed menu, price list or rate card. Up to 4 photos; Counterpart reads the items and prices.</p>
+      <label className={clsx("press mt-3 inline-flex h-10 cursor-pointer items-center gap-2 rounded-full bg-ink px-4 text-[14px] font-semibold text-white", busy && "pointer-events-none opacity-60")}>
+        <Camera size={15} weight="fill" aria-hidden />
+        {busy ? "Reading the menu…" : "Choose photos"}
+        <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" multiple className="sr-only" disabled={busy} onChange={(e) => read(e.target.files)} />
+      </label>
       {note && <p className="mt-2 text-[14px] text-ink-2">{note}</p>}
     </div>
   );

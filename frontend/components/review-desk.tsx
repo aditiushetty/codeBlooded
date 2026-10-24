@@ -30,7 +30,12 @@ export interface ReviewRow {
   via: string | null;
   category: string | null; // Instagram comments: praise, complaint, question, suggestion, mention
   author: string | null; // Instagram username of the commenter
+  customer_phone?: string | null; // on the business's WhatsApp list: the owner can answer from their own WhatsApp
+  customer_name?: string | null;
 }
+
+/** Came through WhatsApp: messaged the bot, or got their code from the owner's WhatsApp list. */
+export const viaWhatsApp = (r: ReviewRow) => r.source === "whatsapp" || r.via === "whatsapp" || r.via === "invite";
 
 /** A review the owner should answer: a low rating, or an Instagram question or complaint. */
 export const needsReply = (r: ReviewRow) => !r.reply && ((r.rating ?? 5) <= 3 || r.category === "question" || r.category === "complaint");
@@ -164,7 +169,7 @@ export function ReplyBox({ r, onSaved }: { r: ReviewRow; onSaved: () => void }) 
     );
 
   const instagram = r.source === "instagram_comment";
-  const direct = r.via === "whatsapp" || instagram;
+  const direct = r.via === "whatsapp" || instagram || !!r.customer_phone;
 
   async function save(send: boolean) {
     setBusy(send ? "send" : "save");
@@ -190,6 +195,19 @@ export function ReplyBox({ r, onSaved }: { r: ReviewRow; onSaved: () => void }) 
         {r.via === "whatsapp" && (
           <Button size="sm" variant="primary" disabled={!text.trim() || busy !== null} onClick={() => save(true)}>
             <WhatsappLogo size={13} aria-hidden /> {busy === "send" ? "Sending…" : "Send on WhatsApp"}
+          </Button>
+        )}
+        {r.via !== "whatsapp" && r.customer_phone && (
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={!text.trim() || busy !== null}
+            onClick={async () => {
+              window.open(`https://wa.me/${r.customer_phone}?text=${encodeURIComponent(text)}`, "_blank", "noopener");
+              await save(false);
+            }}
+          >
+            <WhatsappLogo size={13} aria-hidden /> Send from my WhatsApp
           </Button>
         )}
         {instagram && (

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, GoogleLogo, InstagramLogo, LinkBreak, Plugs, WarningCircle, WhatsappLogo } from "@phosphor-icons/react";
+import { CaretDown, Check, Copy, GoogleLogo, InstagramLogo, LinkBreak, Plugs, WarningCircle, WhatsappLogo } from "@phosphor-icons/react";
 import clsx from "clsx";
 import { useState } from "react";
 import { Shell } from "@/components/shell";
@@ -35,6 +35,18 @@ function Tick({ ok, children }: { ok: boolean; children: React.ReactNode }) {
       {ok ? <Check size={16} weight="bold" className="mt-0.5 shrink-0 text-pen" aria-hidden /> : <WarningCircle size={16} className="mt-0.5 shrink-0 text-turmeric" aria-hidden />}
       <span>{children}</span>
     </li>
+  );
+}
+
+/** Setup steps stay folded until the owner wants them, so a page of three channels is not three walls of text. */
+function Setup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <details className="group mt-5 border-t border-line pt-4">
+      <summary className="press inline-flex cursor-pointer list-none items-center gap-2 rounded-[var(--radius-sm)] bg-ink px-4 py-2 text-[14px] font-semibold text-white">
+        {label} <CaretDown size={13} weight="bold" className="transition-transform group-open:rotate-180" aria-hidden />
+      </summary>
+      {children}
+    </details>
   );
 }
 
@@ -138,28 +150,30 @@ function WhatsApp({ s, onChange }: { s: ChannelsStatus; onChange: () => void }) 
           </div>
         </div>
       ) : (
-        <div className="mt-6 grid grid-cols-1 gap-8 md:grid-cols-2">
-          <Steps
-            items={[
-              <>Log in at <a className="font-semibold text-pen underline" href="https://developers.facebook.com/" target="_blank" rel="noreferrer">developers.facebook.com</a> (first time: <b>Get Started</b> registers you as a developer), then <b>My Apps → Create app</b> with the use case <b>Connect with customers through WhatsApp</b>.</>,
-              <>Under <b>WhatsApp → API Setup</b>: add your own phone as a test recipient (up to 5), copy the <b>Phone number ID</b> and generate an <b>access token</b>.</>,
-              <>Save the app secret and a verify phrase on the server: <code className="font-receipt text-[12px]">set_secret META_APP_SECRET</code> and <code className="font-receipt text-[12px]">set_secret WHATSAPP_VERIFY_TOKEN</code>.</>,
-              <>Under <b>WhatsApp → Configuration</b> paste the callback URL below, type your verify phrase, then subscribe to <b>messages</b>.</>,
-            ]}
-          />
-          <form onSubmit={connect} className="space-y-3">
-            <CopyRow label="Callback URL" value={s.webhook.url} />
-            {!s.public_ok && <p className="text-[13px] text-turmeric">This is not a public https address yet, so Meta cannot reach it. The go_live command above fixes that.</p>}
-            <input className={field} value={pid} onChange={(e) => setPid(e.target.value.replace(/\D/g, ""))} placeholder="Phone number ID" inputMode="numeric" aria-label="Phone number ID" />
-            <input className={field} value={token} onChange={(e) => setToken(e.target.value)} placeholder="Access token" type="password" autoComplete="off" aria-label="Access token" />
-            <input className={field} value={waba} onChange={(e) => setWaba(e.target.value.replace(/\D/g, ""))} placeholder="WhatsApp Business Account ID (to get templates approved)" inputMode="numeric" aria-label="WhatsApp Business Account ID" />
-            <input className={field} value={template} onChange={(e) => setTemplate(e.target.value.toLowerCase())} placeholder="Approved template name (optional)" aria-label="Template name" />
-            <Button type="submit" variant="primary" className="w-full" disabled={busy || pid.length < 5 || token.length < 20}>
-              {busy ? "Checking with Meta…" : "Connect WhatsApp"}
-            </Button>
-            {error && <p className="rounded-[var(--radius-md)] bg-kumkum-soft px-3.5 py-2.5 text-[14px] text-kumkum" role="alert">{error}</p>}
-          </form>
-        </div>
+        <Setup label="Connect WhatsApp">
+          <div className="mt-6 grid grid-cols-1 gap-8 md:grid-cols-2">
+            <Steps
+              items={[
+                <>Log in at <a className="font-semibold text-pen underline" href="https://developers.facebook.com/" target="_blank" rel="noreferrer">developers.facebook.com</a> (first time: <b>Get Started</b> registers you as a developer), then <b>My Apps → Create app</b> with the use case <b>Connect with customers through WhatsApp</b>.</>,
+                <>Under <b>WhatsApp → API Setup</b>: add your own phone as a test recipient (up to 5), copy the <b>Phone number ID</b> and generate an <b>access token</b>.</>,
+                <>Save the app secret and a verify phrase on the server: <code className="font-receipt text-[12px]">set_secret META_APP_SECRET</code> and <code className="font-receipt text-[12px]">set_secret WHATSAPP_VERIFY_TOKEN</code>.</>,
+                <>Under <b>WhatsApp → Configuration</b> paste the callback URL below, type your verify phrase, then subscribe to <b>messages</b>.</>,
+              ]}
+            />
+            <form onSubmit={connect} className="space-y-3">
+              <CopyRow label="Callback URL" value={s.webhook.url} />
+              {!s.public_ok && <p className="text-[13px] text-turmeric">This is not a public https address yet, so Meta cannot reach it. The go_live command above fixes that.</p>}
+              <input className={field} value={pid} onChange={(e) => setPid(e.target.value.replace(/\D/g, ""))} placeholder="Phone number ID" inputMode="numeric" aria-label="Phone number ID" />
+              <input className={field} value={token} onChange={(e) => setToken(e.target.value)} placeholder="Access token" type="password" autoComplete="off" aria-label="Access token" />
+              <input className={field} value={waba} onChange={(e) => setWaba(e.target.value.replace(/\D/g, ""))} placeholder="WhatsApp Business Account ID (to get templates approved)" inputMode="numeric" aria-label="WhatsApp Business Account ID" />
+              <input className={field} value={template} onChange={(e) => setTemplate(e.target.value.toLowerCase())} placeholder="Approved template name (optional)" aria-label="Template name" />
+              <Button type="submit" variant="primary" className="w-full" disabled={busy || pid.length < 5 || token.length < 20}>
+                {busy ? "Checking with Meta…" : "Connect WhatsApp"}
+              </Button>
+              {error && <p className="rounded-[var(--radius-md)] bg-kumkum-soft px-3.5 py-2.5 text-[14px] text-kumkum" role="alert">{error}</p>}
+            </form>
+          </div>
+        </Setup>
       )}
     </section>
   );
@@ -206,23 +220,25 @@ function Instagram({ s, onChange }: { s: ChannelsStatus; onChange: () => void })
           <p className="text-[13px] text-muted">Post or link from a live Instagram post on its campaign page.</p>
         </div>
       ) : (
-        <div className="mt-6 grid grid-cols-1 gap-8 md:grid-cols-2">
-          <Steps
-            items={[
-              <>In the Instagram app, switch the account to <b>Business</b> or <b>Creator</b> (Settings → Account type).</>,
-              <>In the same Meta app, add the use case <b>Manage messaging and content on Instagram</b> (API setup with Instagram login).</>,
-              <>Under <b>Generate access tokens</b>, add your Instagram account and copy its token.</>,
-              <>Paste it here. In test mode only accounts added to the app work; other businesses need Meta's app review.</>,
-            ]}
-          />
-          <form onSubmit={connect} className="space-y-3">
-            <input className={field} value={token} onChange={(e) => setToken(e.target.value)} placeholder="Instagram access token" type="password" autoComplete="off" aria-label="Instagram access token" />
-            <Button type="submit" variant="primary" className="w-full" disabled={busy || token.length < 20}>
-              {busy ? "Checking with Instagram…" : "Connect Instagram"}
-            </Button>
-            {error && <p className="rounded-[var(--radius-md)] bg-kumkum-soft px-3.5 py-2.5 text-[14px] text-kumkum" role="alert">{error}</p>}
-          </form>
-        </div>
+        <Setup label="Connect Instagram">
+          <div className="mt-6 grid grid-cols-1 gap-8 md:grid-cols-2">
+            <Steps
+              items={[
+                <>In the Instagram app, switch the account to <b>Business</b> or <b>Creator</b> (Settings → Account type).</>,
+                <>In the same Meta app, add the use case <b>Manage messaging and content on Instagram</b> (API setup with Instagram login).</>,
+                <>Under <b>Generate access tokens</b>, add your Instagram account and copy its token.</>,
+                <>Paste it here. In test mode only accounts added to the app work; other businesses need Meta's app review.</>,
+              ]}
+            />
+            <form onSubmit={connect} className="space-y-3">
+              <input className={field} value={token} onChange={(e) => setToken(e.target.value)} placeholder="Instagram access token" type="password" autoComplete="off" aria-label="Instagram access token" />
+              <Button type="submit" variant="primary" className="w-full" disabled={busy || token.length < 20}>
+                {busy ? "Checking with Instagram…" : "Connect Instagram"}
+              </Button>
+              {error && <p className="rounded-[var(--radius-md)] bg-kumkum-soft px-3.5 py-2.5 text-[14px] text-kumkum" role="alert">{error}</p>}
+            </form>
+          </div>
+        </Setup>
       )}
     </section>
   );
@@ -314,20 +330,23 @@ export default function ChannelsPage() {
         <Skeleton className="h-96" />
       ) : (
         <div className="space-y-8">
-          {(!data.whatsapp || !data.instagram) && (
-            <section className="rounded-[var(--radius-lg)] bg-marker-soft p-5 ring-1 ring-ink md:p-7" aria-labelledby="fast-h">
-              <h2 id="fast-h" className="text-[22px]">
-                Fastest: one command connects both
-              </h2>
-              <p className="mt-1 max-w-[70ch] text-[15px] text-ink-2">
-                Create the Meta app (docs/CHANNELS.md, about 5 minutes, two sign-ins), then run this on the computer running Counterpart. It checks everything with Meta, opens the tunnel, registers the webhook and connects WhatsApp and Instagram to this business.
-              </p>
-              <div className="mt-3 max-w-xl">
-                <CopyRow label="Run in the project folder" value="cd backend && uv run python -m scripts.go_live" />
-              </div>
-              <p className="mt-2 text-[13px] text-muted">Or connect each one by hand below.</p>
-            </section>
-          )}
+          <ul className="grid grid-cols-1 gap-px overflow-hidden rounded-[var(--radius-lg)] bg-line ring-1 ring-line sm:grid-cols-3" aria-label="Connections">
+            {[
+              { name: "WhatsApp", href: "#wa-h", on: !!data.whatsapp, who: data.whatsapp?.display },
+              { name: "Instagram", href: "#ig-h", on: !!data.instagram, who: data.instagram?.username },
+              { name: "Google listing", href: "#gb-h", on: !!data.google.account?.location, who: data.google.account?.display },
+            ].map((c) => (
+              <li key={c.name}>
+                <a href={c.href} className="flex h-full items-center gap-3 bg-surface px-4 py-3 hover:bg-sunken">
+                  <span className={clsx("h-2.5 w-2.5 shrink-0 rounded-full", c.on ? "bg-leaf" : "ring-1 ring-inset ring-line-strong")} aria-hidden />
+                  <span className="min-w-0">
+                    <span className="block text-[15px] font-semibold">{c.name}</span>
+                    <span className="block truncate text-[13px] text-muted">{c.on ? `Connected${c.who ? `: ${c.who}` : ""}` : "Not connected"}</span>
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ul>
           <p className={clsx("flex items-start gap-2 text-[14px]", data.public_ok ? "text-ink-2" : "text-turmeric")}>
             <Plugs size={18} className="mt-0.5 shrink-0" aria-hidden />
             {data.public_ok ? (
@@ -336,13 +355,18 @@ export default function ChannelsPage() {
               </span>
             ) : (
               <span>
-                Customer links point at <span className="font-receipt text-[12px]">{data.public_url}</span>, which phones and Meta cannot reach. The go_live command above opens a public address for you.
+                Customer links point at <span className="font-receipt text-[12px]">{data.public_url}</span>, which phones and Meta cannot reach. Run <code className="font-receipt text-[12px]">cd backend &amp;&amp; uv run python -m scripts.go_live</code> to open a public address and connect WhatsApp and Instagram in one go (docs/CHANNELS.md).
               </span>
             )}
           </p>
-          <WhatsApp s={data} onChange={reload} />
-          <Instagram s={data} onChange={reload} />
-          <Google s={data} onChange={reload} />
+          {/* Connected channels first: what works is what the owner checks most. */}
+          {[
+            { on: !!data.whatsapp, el: <WhatsApp key="wa" s={data} onChange={reload} /> },
+            { on: !!data.instagram, el: <Instagram key="ig" s={data} onChange={reload} /> },
+            { on: !!data.google.account, el: <Google key="gb" s={data} onChange={reload} /> },
+          ]
+            .sort((a, b) => Number(b.on) - Number(a.on))
+            .map((x) => x.el)}
         </div>
       )}
     </Shell>

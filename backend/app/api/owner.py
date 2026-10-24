@@ -12,7 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from app import ledger, results, reviews, services
+from app import keys, ledger, results, reviews, services
 from app.agent import runtime, situation, team
 from app.agent.tools import DraftFactsArgs
 from app.api.deps import get_router, require_owner, tool_context
@@ -42,6 +42,12 @@ async def get_business(user: CurrentUser, slug: str) -> dict[str, Any]:
                       (select coalesce(sum(qty), 0) from outcome_events o
                         where o.campaign_id = c.id and o.type = 'redeem')::int as redemptions,
                       (select count(*) from assets a where a.campaign_id = c.id and a.status = 'live')::int as live,
+                      (select count(*) from assets a where a.campaign_id = c.id and a.status = 'valid')::int as ready,
+                      (select f.status from offer_facts f where f.campaign_id = c.id and f.status <> 'superseded'
+                        order by f.version desc limit 1) as facts,
+                      (select l.type from ledger_events l where l.campaign_id = c.id
+                         and l.type in ('agent.started', 'agent.finished', 'agent.failed')
+                        order by l.id desc limit 1) as last_run,
                       (select r.image_key from assets a join asset_revisions r
                          on r.asset_id = a.id and r.n = a.current_revision
                         where a.campaign_id = c.id and r.image_key is not null and a.status <> 'rejected'
@@ -52,6 +58,7 @@ async def get_business(user: CurrentUser, slug: str) -> dict[str, Any]:
         for c in campaigns:
             key = c.pop("cover_key")
             c["cover_url"] = storage.url(key) if key else None
+            c["working"] = runtime.is_running(c["id"])
         inbox = await fetch_all(
             conn, """select * from inbox_items where business_id = %s and status = 'pending'
                      order by priority, created_at desc""", (b["id"],))
@@ -75,15 +82,16 @@ async def _read_instagram_comments(router: Any, business: dict[str, Any]) -> Non
 async def customers(user: CurrentUser, slug: str, request: Request, bg: BackgroundTasks, days: int = 14) -> dict[str, Any]:
     async with connection() as conn:
         b = await business_for(conn, user, slug)
-        if await instagram.account(conn, b["id"]):
-            bg.add_task(_read_instagram_comments, get_router(request), b)  # reads at most once an hour
+        ig = await instagram.account(conn, b["id"])
+        if ig:
+            bg.add_task(_read_instagram_comments, get_router(request), b)  # reads at most every few minutes
         themes = await situation.theme_trends(conn, b["id"], days=days)
         recent = await fetch_all(
             conn, """select ci.id, ci.source, ci.language, ci.segment, ci.rating, ci.body, ci.occurred_at, ci.sentiment,
                             ci.themes, ci.translation, ci.reply, ci.replied_at, ci.reply_draft, ci.claim_code, c.name as campaign,
-                            cl.via, ci.category, ci.author
+                            cl.via, ci.category, ci.author, cu.phone as customer_phone, cu.name as customer_name
                      from customer_interactions ci left join campaigns c on c.id = ci.campaign_id
-                     left join claims cl on cl.code = ci.claim_code
+                     left join claims cl on cl.code = ci.claim_code left join customers cu on cu.id = cl.customer_id
                      where ci.business_id = %s and ci.category is distinct from 'spam'
                      order by ci.occurred_at desc limit 60""",
             (b["id"],))
@@ -108,6 +116,8 @@ async def customers(user: CurrentUser, slug: str, request: Request, bg: Backgrou
             (b["id"],))
     return {"themes": themes, "recent": recent, "insights": insights, "language_mix": mix, "visits": visits,
             "instagram_comments": {r["category"]: r["n"] for r in comments},
+            "instagram": ig and {"username": ig["display"], "checked_at": (ig["meta"] or {}).get("comments_at"),
+                                 "hidden": (ig["meta"] or {}).get("comments_hidden") or 0},
             "google_review_url": (b["profile"] or {}).get("google_review_url")}
 
 
@@ -217,6 +227,17 @@ async def system_status(user: CurrentUser, request: Request) -> dict[str, Any]:
     return {**get_router(request).status(), "storage": s.storage_backend}
 
 
+@api.get("/businesses/{slug}/keys")
+async def key_status(user: CurrentUser, slug: str, request: Request, check: bool = False) -> dict[str, Any]:
+    """Which API keys are set and working (never the keys themselves), plus this business's channel logins.
+    `check=true` asks each AI provider whether its key is valid, without spending quota."""
+    if check:
+        await keys.check()
+    async with connection() as conn:
+        b = await business_for(conn, user, slug)
+        return await keys.status(conn, get_router(request), business=b)
+
+
 # ------------------------------------------------------------------ campaigns
 
 
@@ -251,7 +272,7 @@ async def get_campaign(user: CurrentUser, campaign_id: str) -> dict[str, Any]:
                       (select json_object_agg(type, n) from (
                          select type, sum(qty)::int as n from outcome_events o where o.asset_id = a.id group by type) x
                       ) as outcomes,
-                      (select json_build_object('media_id', m.media_id, 'permalink', m.permalink)
+                      (select json_build_object('media_id', m.media_id, 'permalink', m.permalink, 'code_line', m.code_line)
                        from instagram_media m where m.asset_id = a.id limit 1) as instagram
                from assets a left join asset_revisions r on r.asset_id = a.id and r.n = a.current_revision
                where a.campaign_id = %s order by a.created_at""",
@@ -366,7 +387,7 @@ async def simulate_week(user: CurrentUser, campaign_id: str) -> dict[str, Any]:
                     if rng.random() < base * 2.2:
                         rows.append((tp, "click", at + timedelta(minutes=1), {"synthetic": True}))
                         if rng.random() < 0.6 and (when := _redeem_time(rng, at, rules, now)):
-                            meta: dict[str, Any] = {"synthetic": True}
+                            meta: dict[str, Any] = {"synthetic": True, "from_link": True}
                             if rng.random() < 0.7:  # staff do not always type the bill
                                 meta["bill_amount"] = round(sum(rng.choice(prices) for _ in range(rng.randint(1, 3))))
                             rows.append((tp, "redeem", when, meta))

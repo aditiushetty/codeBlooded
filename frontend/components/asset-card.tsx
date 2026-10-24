@@ -2,7 +2,7 @@
 
 import { ArrowSquareOut, Camera, CaretDown, Check, DeviceMobile, DownloadSimple, InstagramLogo, LinkSimple, PencilSimple, SealCheck, ShareNetwork, Sparkle, Storefront, WarningOctagon, WhatsappLogo, X } from "@phosphor-icons/react";
 import clsx from "clsx";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { Asset, ChannelsStatus, Fact, Validation } from "@/lib/types";
 import { InstagramPicker } from "./instagram-picker";
@@ -79,6 +79,39 @@ export async function postToInstagram(assetId: string) {
   if (!node) throw new Error("Show this post in the Posts section above (pick “All”), then try again.");
   const data_url = await toJpeg(await renderPng(node));
   return api<{ media_id: string; permalink: string | null }>(`/assets/${assetId}/instagram/publish`, { method: "POST", json: { data_url } });
+}
+
+/** With auto-publish on, live Instagram posts go to the connected account by themselves while the campaign page is
+ *  open (the picture is drawn from its card here, in the browser). Each post is tried once per page visit; the
+ *  server refuses a post that is already on Instagram. */
+export function useInstagramAutoPost(assets: Asset[], on: boolean, onPosted: () => void) {
+  const tried = useRef(new Set<string>());
+  const [state, setState] = useState<{ posting: number; error: string | null }>({ posting: 0, error: null });
+  const due = on ? assets.filter((a) => a.channel === "instagram_post" && a.status === "live" && !a.instagram && !tried.current.has(a.id)) : [];
+  const key = due.map((a) => a.id).join(",");
+
+  useEffect(() => {
+    if (!key) return;
+    const t = setTimeout(async () => {
+      // Only posts whose card is on the page can be drawn; the others wait until it is shown.
+      const ids = key.split(",").filter((id) => document.querySelector(`[data-post="${id}"]`));
+      if (!ids.length) return;
+      ids.forEach((id) => tried.current.add(id));
+      setState({ posting: ids.length, error: null });
+      let error: string | null = null;
+      for (const id of ids) {
+        try {
+          await postToInstagram(id);
+        } catch (e) {
+          error = e instanceof Error ? e.message : String(e);
+        }
+      }
+      setState({ posting: 0, error });
+      onPosted();
+    }, 2500); // let the post's photo load before it is drawn
+    return () => clearTimeout(t);
+  }, [key, onPosted]);
+  return state;
 }
 
 export function AssetCard({ asset, facts, business, onChange, i = 0, channels }: { asset: Asset; facts: Fact[]; business: string; onChange: () => void; i?: number; channels?: ChannelsStatus | null }) {
@@ -226,9 +259,22 @@ export function AssetCard({ asset, facts, business, onChange, i = 0, channels }:
               </Button>
               {asset.status === "live" && asset.channel === "instagram_post" && channels?.instagram && (
                 asset.instagram ? (
-                  <a href={asset.instagram.permalink ?? "#"} target="_blank" rel="noreferrer" className="press inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 text-[13px] font-semibold text-pen hover:bg-pen-soft">
-                    <InstagramLogo size={15} aria-hidden /> On Instagram <ArrowSquareOut size={13} aria-hidden />
-                  </a>
+                  <>
+                    {!asset.instagram.code_line && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={busy !== null}
+                        title="Adds a comment from you: Comment CODE and we'll send you your own one-time code. Instagram does not let apps edit a caption."
+                        onClick={() => act("code-line", () => api(`/assets/${asset.id}/instagram/code-line`, { method: "POST" }))}
+                      >
+                        {busy === "code-line" ? "Adding…" : "Add \u201cComment CODE\u201d"}
+                      </Button>
+                    )}
+                    <a href={asset.instagram.permalink ?? "#"} target="_blank" rel="noreferrer" className="press inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 text-[13px] font-semibold text-pen hover:bg-pen-soft">
+                      <InstagramLogo size={15} aria-hidden /> On Instagram <ArrowSquareOut size={13} aria-hidden />
+                    </a>
+                  </>
                 ) : (
                   <>
                     <Button

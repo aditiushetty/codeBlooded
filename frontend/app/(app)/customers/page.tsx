@@ -2,8 +2,10 @@
 
 import { ArrowDownRight, ArrowRight, ArrowUpRight, ChatCircleText, ClipboardText, Ear, ForkKnife, Globe, GoogleLogo, InstagramLogo, Plus, SealCheck, Star, WhatsappLogo } from "@phosphor-icons/react";
 import clsx from "clsx";
+import Link from "next/link";
 import { useState } from "react";
-import { GoogleLink, needsReply, ReplyBox, type ReviewRow, VisitSummary, type Visits } from "@/components/review-desk";
+import { CustomerList } from "@/components/customer-list";
+import { GoogleLink, needsReply, viaWhatsApp, ReplyBox, type ReviewRow, VisitSummary, type Visits } from "@/components/review-desk";
 import { ReviewImport } from "@/components/review-import";
 import { Shell } from "@/components/shell";
 import { Button, LANG_LABEL, PageHeader, SectionHeading, SEGMENT_LABEL, Skeleton, stagger, timeAgo } from "@/components/ui";
@@ -17,6 +19,7 @@ interface Customers {
   visits: Visits;
   instagram_comments: Record<string, number>; // count per category ("unread" until the model has read them)
   google_review_url: string | null;
+  instagram: { username: string; checked_at: string | null; hidden: number } | null;
   insights: { kind: string; key: string; period_start: string | null; period_end: string | null; data: Record<string, any> }[];
   language_mix: { language: string; n: number; sentiment: number | null }[];
 }
@@ -59,6 +62,7 @@ const FILTERS = [
   { key: "all", label: "All" },
   { key: "visits", label: "Verified visits" },
   { key: "instagram", label: "Instagram" },
+  { key: "whatsapp", label: "WhatsApp" },
   { key: "reply", label: "Needs a reply" },
 ] as const;
 // What an Instagram comment is, as read by Counterpart. Yellow = the owner should answer it.
@@ -97,13 +101,54 @@ function Rating({ n }: { n: number }) {
   );
 }
 
+/** Where Instagram comments stand: when they were last read, a way to read them now, and why some may be missing. */
+function InstagramCheck({ slug, ig, onDone, dark }: { slug: string; ig: NonNullable<Customers["instagram"]>; onDone: () => void; dark?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  async function check() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await api<{ comments: number }>(`/businesses/${slug}/instagram/sync`, { method: "POST" });
+      setNote(r.comments ? `${r.comments} new comment${r.comments === 1 ? "" : "s"} read.` : "No new comments.");
+      onDone();
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : "Could not reach Instagram.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className={clsx("text-[14px]", dark ? "text-white/80" : "text-ink-2")}>
+      <p className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className={clsx("inline-flex items-center gap-1.5 font-semibold", dark ? "text-white" : "text-ink")}>
+          <InstagramLogo size={15} aria-hidden /> {ig.username}
+        </span>
+        <span>{ig.checked_at ? `Comments checked ${timeAgo(ig.checked_at)}` : "Comments not checked yet"}</span>
+        <button onClick={check} disabled={busy} className={clsx("press font-semibold underline underline-offset-2", dark ? "text-marker" : "text-pen")}>
+          {busy ? "Checking…" : "Check now"}
+        </button>
+        {note && <span>{note}</span>}
+      </p>
+      {ig.hidden > 0 && (
+        <p className={clsx("mt-2 max-w-[70ch] rounded-[var(--radius-sm)] px-3 py-2 text-[13px]", dark ? "bg-white/10" : "bg-turmeric-soft text-ink")}>
+          Instagram counts {ig.hidden} more comment{ig.hidden === 1 ? "" : "s"} but won't share {ig.hidden === 1 ? "it" : "them"} yet. While your Meta app is in
+          development mode, Instagram only shows comments from accounts added as Instagram testers on the app. Add the commenter as a tester, or take the app live after Meta's review.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function CustomersPage() {
   const business = useBusiness();
   const { data, reload } = useResource<Customers>(`/businesses/${business.slug}/customers`, (e) => e.type.startsWith("customers.") || e.type.startsWith("listener."));
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<(typeof FILTERS)[number]["key"]>("all");
   const shown = (data?.recent ?? []).filter((r) =>
-    filter === "visits" ? r.source === "visit_review" : filter === "instagram" ? r.source === "instagram_comment" : filter === "reply" ? needsReply(r) : true,
+    filter === "visits" ? r.source === "visit_review" : filter === "instagram" ? r.source === "instagram_comment" : filter === "whatsapp" ? viaWhatsApp(r) : filter === "reply" ? needsReply(r) : true,
   );
   const ig = data?.instagram_comments ?? {};
   const igTotal = Object.values(ig).reduce((n, v) => n + v, 0);
@@ -130,16 +175,46 @@ export default function CustomersPage() {
     return (
       <Shell>
         <PageHeader title="What customers are saying" />
-        <div className="night rise-in rounded-[var(--radius-lg)] p-8 md:p-12">
-          <ChatCircleText size={34} className="text-marker" aria-hidden />
-          <p className="mt-4 max-w-[24ch] text-[30px] font-semibold leading-tight tracking-[-0.03em]">Your customers' words will show up here.</p>
-          <p className="mt-3 max-w-[60ch] text-[15px] text-white/70">
-            Counterpart reads reviews and messages in every language they were written in, groups them into topics, and writes campaigns that answer what people actually say.
-          </p>
-          <div className="mt-8">
-            <ReviewImport onDone={reload} dark />
-          </div>
+        <p className="-mt-4 max-w-[64ch] text-[16px] text-ink-2">
+          No customer words yet. Counterpart reads reviews and messages in every language, groups them into topics, and writes campaigns that answer what people say. Here is where they come from:
+        </p>
+        <ol className="mt-8 grid grid-cols-1 gap-px overflow-hidden rounded-[var(--radius-lg)] bg-line ring-1 ring-line md:grid-cols-3">
+          <li className="rise-in bg-surface p-6" style={stagger(0)}>
+            <p className="font-mono text-[12px] font-semibold text-muted">01 · AUTOMATIC</p>
+            <p className="mt-2 text-[19px] font-bold [font-stretch:90%]">Reviews after a visit</p>
+            <p className="mt-1 text-[14px] text-ink-2">
+              When staff redeem a personal code (from &ldquo;Get my code&rdquo; or your WhatsApp list), the customer&apos;s phone asks how it was. Codes typed straight from a caption don&apos;t ask.
+            </p>
+          </li>
+          <li className="rise-in bg-surface p-6" style={stagger(1)}>
+            <p className="font-mono text-[12px] font-semibold text-muted">02 · INSTAGRAM</p>
+            <p className="mt-2 text-[19px] font-bold [font-stretch:90%]">Comments on your posts</p>
+            {data.instagram ? (
+              <div className="mt-2">
+                <InstagramCheck slug={business.slug} ig={data.instagram} onDone={reload} />
+              </div>
+            ) : (
+              <p className="mt-1 text-[14px] text-ink-2">
+                <Link href="/channels" className="font-semibold text-pen hover:underline">
+                  Connect Instagram
+                </Link>{" "}
+                and every comment is read and sorted: praise, questions, complaints.
+              </p>
+            )}
+          </li>
+          <li className="rise-in bg-surface p-6" style={stagger(2)}>
+            <p className="font-mono text-[12px] font-semibold text-muted">03 · NOW</p>
+            <p className="mt-2 text-[19px] font-bold [font-stretch:90%]">Reviews you already have</p>
+            <p className="mt-1 text-[14px] text-ink-2">From your website, or paste them from Google, Zomato or WhatsApp. Only words found in the source are kept.</p>
+          </li>
+        </ol>
+        <div className="mt-6">
+          <ReviewImport onDone={reload} />
         </div>
+        <section className="mt-16 scroll-mt-20" aria-labelledby="list-h">
+          <SectionHeading id="list-h" title="Your WhatsApp list" sub="Customers who agreed to hear from you. Each campaign can send them a personal code from your own WhatsApp, then ask how it was." />
+          <CustomerList slug={business.slug} />
+        </section>
       </Shell>
     );
 
@@ -228,61 +303,70 @@ export default function CustomersPage() {
         </section>
       )}
 
-      <div className="mt-16 grid grid-cols-1 gap-12 lg:grid-cols-12">
-        <section className="lg:col-span-7" aria-labelledby="who-h">
-          <SectionHeading id="who-h" title="Who comes in" />
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {segments.map((s, i) => (
-              <article key={s.key} className="rise-in rounded-[var(--radius-lg)] bg-surface p-5 shadow-[var(--shadow-soft)] ring-1 ring-line/80" style={stagger(i)}>
-                <p className="text-[40px] font-semibold leading-none tracking-[-0.04em] tabular-nums">
-                  {Math.round((s.data.share ?? 0) * 100)}
-                  <span className="text-[20px] text-muted">%</span>
-                </p>
-                <p className="mt-2 text-[16px] font-semibold tracking-tight">{s.data.name}</p>
-                <p className="text-sm text-muted">{s.data.peak}</p>
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {(s.data.motivations ?? []).map((m: string) => (
-                    <span key={m} className="rounded-[var(--radius-sm)] bg-sunken px-2.5 py-0.5 text-[13px] text-ink-2">
-                      {m}
-                    </span>
-                  ))}
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-        <section className="lg:col-span-5" aria-labelledby="upcoming-h">
-          <SectionHeading id="upcoming-h" title="Coming up" />
-          <ol className="space-y-3">
-            {events.map((e, i) => {
-              const d = e.period_start ? new Date(e.period_start) : null;
-              return (
-                <li key={e.key} className="rise-in flex items-center gap-4 rounded-[var(--radius-lg)] bg-surface p-4 shadow-[var(--shadow-soft)] ring-1 ring-line/80" style={stagger(i)}>
-                  <span className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-[var(--radius-lg)] bg-ink text-white">
-                    <span className="text-[20px] font-semibold leading-none tabular-nums">{d ? d.getDate() : "?"}</span>
-                    <span className="mt-0.5 text-[12px] uppercase tracking-wide text-marker">{d ? d.toLocaleDateString("en-IN", { month: "short" }) : ""}</span>
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block text-[15px] font-medium leading-snug">{e.data.name}</span>
-                    <span className="block text-sm text-muted">{e.data.hook}</span>
-                  </span>
-                </li>
-              );
-            })}
-          </ol>
-          {data && (
-            <div className="mt-6 flex flex-wrap gap-6 rounded-[var(--radius-lg)] bg-surface/60 p-5 ring-1 ring-line/80">
-              <p className="w-full text-[13px] text-muted">Messages by language</p>
-              {data.language_mix.map((l) => (
-                <div key={l.language}>
-                  <p className="text-[24px] font-semibold leading-none tracking-tight tabular-nums">{l.n}</p>
-                  <p className="mt-1 text-[13px] text-muted">{LANG_LABEL[l.language] ?? { "kn-Latn": "Kannada in English letters", "hi-Latn": "Hindi in English letters", other: "Other languages" }[l.language] ?? l.language}</p>
-                </div>
-              ))}
-            </div>
+      {(segments.length > 0 || events.length > 0 || (data?.language_mix.length ?? 0) > 0) && (
+        <div className="mt-16 grid grid-cols-1 gap-12 lg:grid-cols-12">
+          {segments.length > 0 && (
+            <section className="lg:col-span-7" aria-labelledby="who-h">
+              <SectionHeading id="who-h" title="Who comes in" />
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {segments.map((s, i) => (
+                  <article key={s.key} className="rise-in rounded-[var(--radius-lg)] bg-surface p-5 shadow-[var(--shadow-soft)] ring-1 ring-line/80" style={stagger(i)}>
+                    <p className="text-[40px] font-semibold leading-none tracking-[-0.04em] tabular-nums">
+                      {Math.round((s.data.share ?? 0) * 100)}
+                      <span className="text-[20px] text-muted">%</span>
+                    </p>
+                    <p className="mt-2 text-[16px] font-semibold tracking-tight">{s.data.name}</p>
+                    <p className="text-sm text-muted">{s.data.peak}</p>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {(s.data.motivations ?? []).map((m: string) => (
+                        <span key={m} className="rounded-[var(--radius-sm)] bg-sunken px-2.5 py-0.5 text-[13px] text-ink-2">
+                          {m}
+                        </span>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
           )}
-        </section>
-      </div>
+          <section className={clsx(segments.length ? "lg:col-span-5" : "lg:col-span-12")} aria-labelledby="upcoming-h">
+            {events.length > 0 && <SectionHeading id="upcoming-h" title="Coming up" />}
+            <ol className="space-y-3">
+              {events.map((e, i) => {
+                const d = e.period_start ? new Date(e.period_start) : null;
+                return (
+                  <li key={e.key} className="rise-in flex items-center gap-4 rounded-[var(--radius-lg)] bg-surface p-4 shadow-[var(--shadow-soft)] ring-1 ring-line/80" style={stagger(i)}>
+                    <span className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-[var(--radius-lg)] bg-ink text-white">
+                      <span className="text-[20px] font-semibold leading-none tabular-nums">{d ? d.getDate() : "?"}</span>
+                      <span className="mt-0.5 text-[12px] uppercase tracking-wide text-marker">{d ? d.toLocaleDateString("en-IN", { month: "short" }) : ""}</span>
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-[15px] font-medium leading-snug">{e.data.name}</span>
+                      <span className="block text-sm text-muted">{e.data.hook}</span>
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+            {data && (
+              <div className="mt-6 flex flex-wrap gap-6 rounded-[var(--radius-lg)] bg-surface/60 p-5 ring-1 ring-line/80">
+                <p className="w-full text-[13px] text-muted">Messages by language</p>
+                {data.language_mix.map((l) => (
+                  <div key={l.language}>
+                    <p className="text-[24px] font-semibold leading-none tracking-tight tabular-nums">{l.n}</p>
+                    <p className="mt-1 text-[13px] text-muted">{LANG_LABEL[l.language] ?? { "kn-Latn": "Kannada in English letters", "hi-Latn": "Hindi in English letters", other: "Other languages" }[l.language] ?? l.language}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
+      <section className="mt-16 scroll-mt-20" aria-labelledby="list-h">
+        <SectionHeading id="list-h" title="Your WhatsApp list" sub="Customers who agreed to hear from you. Each campaign can send them a personal code from your own WhatsApp, then ask how it was." />
+        <CustomerList slug={business.slug} />
+      </section>
 
       <section className="mt-16" aria-labelledby="visits-h">
         <SectionHeading id="visits-h" title="Reviews from visits" sub="Asked automatically after a code is redeemed, on the customer's phone or on WhatsApp. Every one is a real visit, so nobody can fake them." />
@@ -299,6 +383,11 @@ export default function CustomersPage() {
             </button>
           ))}
         </div>
+        {data?.instagram && (filter === "all" || filter === "instagram") && (
+          <div className="mb-4">
+            <InstagramCheck slug={business.slug} ig={data.instagram} onDone={reload} />
+          </div>
+        )}
         {igTotal > 0 && (filter === "all" || filter === "instagram") && (
           <p className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[14px] text-ink-2">
             <span className="inline-flex items-center gap-1.5 font-semibold text-ink">
@@ -338,7 +427,7 @@ export default function CustomersPage() {
                 {!r.body && r.source === "visit_review" && <p className="text-[14px] text-muted">Stars only, no comment.</p>}
                 <p className="mt-3 text-[13px] text-muted">
                   {r.source === "visit_review"
-                    ? `Came in through “${r.campaign ?? "a campaign"}”${r.via === "whatsapp" ? ", on WhatsApp" : ""}`
+                    ? `Came in through “${r.campaign ?? "a campaign"}”${r.via === "whatsapp" ? ", on WhatsApp" : r.via === "invite" ? `, from your WhatsApp list${r.customer_name ? ` (${r.customer_name})` : ""}` : r.via === "instagram" ? ", from an Instagram comment" : ""}`
                     : r.source === "instagram_comment"
                       ? `@${r.author ?? "someone"}${r.campaign ? ` on a “${r.campaign}” post` : ""}`
                       : (SEGMENT_LABEL[r.segment ?? ""] ?? "Customer")}

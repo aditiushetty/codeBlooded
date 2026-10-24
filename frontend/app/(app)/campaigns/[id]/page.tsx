@@ -5,7 +5,7 @@ import clsx from "clsx";
 import Link from "next/link";
 import { use, useMemo, useState } from "react";
 import { AgentStatus } from "@/components/agent-status";
-import { AssetCard } from "@/components/asset-card";
+import { AssetCard, useInstagramAutoPost } from "@/components/asset-card";
 import { Composer } from "@/components/composer";
 import { ExperimentPanel } from "@/components/experiment-panel";
 import { FactsCard } from "@/components/facts-card";
@@ -14,6 +14,7 @@ import { EffortLine } from "@/components/effort-cost";
 import { JourneyTrack } from "@/components/journey";
 import { CampaignAnalytics } from "@/components/campaign-analytics";
 import { FestivalCard } from "@/components/festival-card";
+import { SendToCustomers } from "@/components/customer-list";
 import { SharePanel } from "@/components/share-panel";
 import { TeamFeed } from "@/components/team-feed";
 import { Shell } from "@/components/shell";
@@ -60,6 +61,8 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
   const blocked = visible.filter((a) => a.status === "invalid").length;
   const live = visible.filter((a) => a.status === "live");
   const rows = (results?.posts ?? []).filter((r) => r.campaign_id === id);
+  const lockedNow = data?.facts.find((f) => f.status === "locked");
+  const autoInstagram = useInstagramAutoPost(visible, !!channelStatus?.instagram && !!lockedNow && data?.campaign.autopublish_version === lockedNow.version, reload);
 
   async function tell(text: string) {
     await api(`/campaigns/${id}/agent`, { method: "POST", json: { message: text } });
@@ -136,7 +139,7 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
       )}
 
       <div className="mt-8">
-        <AgentStatus campaignId={id} />
+        <AgentStatus campaignId={id} carryOn={step <= 2 && data.inbox.length === 0 && !data.assets.some((a) => a.status === "valid")} />
       </div>
 
       {data.inbox.length > 0 && (
@@ -250,8 +253,18 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
 
           <section id="share" aria-labelledby="share-h">
             <SectionHeading id="share-h" title="Share" sub="Every approved post has its own link and QR code, so you can see which one brought people in." />
+            {(autoInstagram.posting > 0 || autoInstagram.error) && (
+              <p className={clsx("mb-4 text-[14px]", autoInstagram.error ? "text-kumkum" : "text-pen")}>
+                {autoInstagram.posting > 0
+                  ? `Posting ${autoInstagram.posting} post${autoInstagram.posting === 1 ? "" : "s"} to ${channelStatus?.instagram?.username ?? "Instagram"}…`
+                  : `Could not post to Instagram: ${autoInstagram.error}`}
+              </p>
+            )}
             {live.length ? (
-              <SharePanel assets={live} rows={rows} channels={channelStatus} />
+              <>
+                <SharePanel assets={live} rows={rows} channels={channelStatus} />
+                <SendToCustomers campaignId={id} slug={business.slug} />
+              </>
             ) : (
               <Empty icon={<LinkSimple size={17} aria-hidden />}>Approve a post and its link, QR code and WhatsApp message appear here, ready to send.</Empty>
             )}
@@ -280,7 +293,7 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
           <div>
             <h2 className="text-[24px]">Tell Counterpart</h2>
             <p className="mb-3 mt-1 text-[14px] text-muted">Ask for changes in plain words. Offer changes come back to you to lock.</p>
-            <Composer rows={3} placeholder="Make it Sunday only, Saturday has a private booking." submitLabel="Send" onSubmit={tell} suggestions={TELL_SUGGESTIONS} />
+            <Composer compact rows={3} placeholder="Make it Sunday only, Saturday has a private booking." submitLabel="Send" onSubmit={tell} suggestions={TELL_SUGGESTIONS} />
             {sent && <p className="mt-3 text-[14px] text-pen">On it: “{sent}”. Watch the team below.</p>}
           </div>
           <section aria-labelledby="team-feed-h">

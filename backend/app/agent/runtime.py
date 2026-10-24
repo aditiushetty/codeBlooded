@@ -27,6 +27,13 @@ GATED = {"customer_facing", "fact"}
 CONTINUE = ("If you said you would do something, do it now by calling the tools. If everything you can do is done "
             "or waiting for the owner, reply with your final one- or two-sentence note for the owner.")
 _running: set[str] = set()
+# Triggers that arrived while a run was going (an owner's answer, a new instruction). The run that holds the key
+# takes them up when it ends, so an answer given mid-run is never dropped.
+_queued: dict[str, list[str]] = {}
+
+
+def is_running(key: Any) -> bool:
+    return str(key) in _running
 
 
 def _unwrap_json_strings(args: dict[str, Any]) -> dict[str, Any]:
@@ -107,6 +114,15 @@ async def _execute(ctx: ToolContext, name: str, raw_args: str | dict[str, Any]) 
 
 
 async def run(ctx: ToolContext, trigger: str) -> dict[str, Any]:
+    """One agent run, then one more for anything that arrived while it ran."""
+    key = str(ctx.campaign_id or ctx.business["id"])
+    out = await _run_limited(ctx, trigger)
+    while out.get("status") != "busy" and (more := _queued.pop(key, None)):
+        out = await _run_limited(ctx, "While you were working: " + " | ".join(more))
+    return out
+
+
+async def _run_limited(ctx: ToolContext, trigger: str) -> dict[str, Any]:
     """One agent run, with a time limit so a stuck model never leaves the owner watching a spinner."""
     limit = ctx.settings.agent_run_timeout_s
     try:
@@ -123,7 +139,8 @@ async def run(ctx: ToolContext, trigger: str) -> dict[str, Any]:
 async def _run(ctx: ToolContext, trigger: str) -> dict[str, Any]:
     key = str(ctx.campaign_id or ctx.business["id"])
     if key in _running:
-        return {"status": "busy", "message": "Already working on this."}
+        _queued.setdefault(key, []).append(trigger)
+        return {"status": "busy", "message": "Already working on this; I'll take it up when this run ends."}
     _running.add(key)
     s = ctx.settings
     steps: list[dict[str, Any]] = []

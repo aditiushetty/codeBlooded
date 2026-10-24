@@ -10,7 +10,7 @@ import { Shell } from "@/components/shell";
 import { CHANNEL_LABEL, Empty, PageHeader, Skeleton, stagger } from "@/components/ui";
 import { useResource } from "@/lib/api";
 import { useBusiness } from "@/lib/business";
-import { nextAction, stepOfSummary } from "@/lib/journey";
+import { stepOfSummary, summaryState } from "@/lib/journey";
 import type { CampaignSummary, Overview, ResultRow, Results } from "@/lib/types";
 
 type Row = CampaignSummary & {
@@ -18,6 +18,7 @@ type Row = CampaignSummary & {
   opened: number;
   claimed: number;
   redeemed: number;
+  fromLink: number;
   conversion: number | null;
   best: ResultRow | null;
 };
@@ -43,6 +44,7 @@ function Totals({ rows }: { rows: Row[] }) {
   const opened = rows.reduce((n, r) => n + r.opened, 0);
   const claimed = rows.reduce((n, r) => n + r.claimed, 0);
   const redeemed = rows.reduce((n, r) => n + r.redeemed, 0);
+  const fromLink = rows.reduce((n, r) => n + r.fromLink, 0);
   const cells = [
     { n: live, label: "posts live", note: "reach" },
     { n: opened, label: "links opened", note: "interest" },
@@ -62,7 +64,7 @@ function Totals({ rows }: { rows: Row[] }) {
       ))}
       <div className="rise-in col-span-2 bg-ink p-5 text-white lg:col-span-1" style={stagger(4)}>
         <p className="font-mono text-[12px] font-semibold uppercase text-white/50">conversion</p>
-        <p className="sign tabular mt-1 text-[56px] text-marker">{opened ? pct(redeemed / opened) : "–"}</p>
+        <p className="sign tabular mt-1 text-[56px] text-marker">{opened ? pct(fromLink / opened) : "–"}</p>
         <p className="mt-1 text-[14px] text-white/70">{opened ? "of people who opened a link came in" : "shows once links are opened"}</p>
       </div>
     </section>
@@ -94,7 +96,8 @@ function CampaignTable({ rows }: { rows: Row[] }) {
       </div>
       <ul>
         {rows.map((r, i) => {
-          const needsYou = r.step === 1 || r.step === 2;
+          const st = summaryState(r);
+          const needsYou = st.you;
           return (
             <li key={r.id} className="rise-in" style={stagger(Math.min(i, 10))}>
               <Link href={`/campaigns/${r.id}`} className={clsx("group grid grid-cols-5 items-center gap-x-4 gap-y-3 border-b border-line py-4 transition-colors hover:bg-ink/[0.025]", cols)}>
@@ -110,7 +113,7 @@ function CampaignTable({ rows }: { rows: Row[] }) {
                     <span className="block truncate text-[19px] font-bold leading-tight [font-stretch:90%]">{r.name}</span>
                     <JourneyMini step={r.step} className="mt-1.5 max-w-[180px]" />
                     <span className={clsx("mt-1 block truncate text-[13px]", needsYou ? "font-semibold text-ink" : "text-muted")}>
-                      {needsYou ? <span className="hl">{nextAction(r.step)}</span> : r.step >= 5 ? "Finished" : nextAction(r.step)}
+                      {needsYou ? <span className="hl">{st.text}</span> : r.step >= 5 ? "Finished" : st.text}
                     </span>
                   </span>
                 </span>
@@ -155,16 +158,19 @@ export default function Campaigns() {
       const claimed = posts.reduce((n, p) => n + p.claims, 0);
       // Past campaigns carry imported totals without per-post rows.
       const redeemed = posts.length ? posts.reduce((n, p) => n + p.redeemed, 0) : c.redemptions;
+      // Conversion: of the people who opened a link, how many came in with the code they got there. A post's code typed
+      // at the counter (caption, poster) is a redemption but not a link conversion, so this never goes over 100%.
+      const fromLink = posts.reduce((n, p) => n + p.from_link, 0);
       const best = [...posts].sort((a, b) => b.redeemed - a.redeemed || (b.conversion ?? 0) - (a.conversion ?? 0))[0];
-      return { ...c, step: stepOfSummary(c), opened, claimed, redeemed, conversion: opened ? redeemed / opened : null, best: best && best.redeemed > 0 ? best : null };
+      return { ...c, step: stepOfSummary(c), opened, claimed, redeemed, fromLink, conversion: opened ? fromLink / opened : null, best: best && best.redeemed > 0 ? best : null };
     });
   }, [data, results]);
 
   const shown = rows
-    .filter((r) => (filter === "you" ? r.step === 1 || r.step === 2 : filter === "live" ? (r.live ?? 0) > 0 && r.step < 5 : filter === "done" ? r.step >= 5 : true))
+    .filter((r) => (filter === "you" ? summaryState(r).you : filter === "live" ? (r.live ?? 0) > 0 && r.step < 5 : filter === "done" ? r.step >= 5 : true))
     .sort((a, b) => (sort === "redeemed" ? b.redeemed - a.redeemed : sort === "conversion" ? (b.conversion ?? -1) - (a.conversion ?? -1) : +new Date(b.created_at) - +new Date(a.created_at)));
   const count = (id: (typeof FILTERS)[number]["id"]) =>
-    rows.filter((r) => (id === "you" ? r.step === 1 || r.step === 2 : id === "live" ? (r.live ?? 0) > 0 && r.step < 5 : id === "done" ? r.step >= 5 : true)).length;
+    rows.filter((r) => (id === "you" ? summaryState(r).you : id === "live" ? (r.live ?? 0) > 0 && r.step < 5 : id === "done" ? r.step >= 5 : true)).length;
 
   return (
     <Shell>

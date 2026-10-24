@@ -1,7 +1,7 @@
 import { ArrowRight, Megaphone } from "@phosphor-icons/react";
 import clsx from "clsx";
 import Link from "next/link";
-import { nextAction, stepOfSummary } from "@/lib/journey";
+import { summaryState } from "@/lib/journey";
 import type { CampaignSummary } from "@/lib/types";
 import { JourneyMini } from "./journey";
 import { stagger } from "./ui";
@@ -10,8 +10,7 @@ const when = (d: string | null) => (d ? new Date(d).toLocaleDateString("en-IN", 
 
 /** One line of the campaign ledger: picture, name, where it is in the flow, and the numbers that matter. */
 export function CampaignRow({ c, i = 0 }: { c: CampaignSummary; i?: number }) {
-  const step = stepOfSummary(c);
-  const needsYou = step === 1 || step === 2;
+  const { step, text, you: needsYou } = summaryState(c);
   const dates = [when(c.starts_on), when(c.ends_on)].filter(Boolean).join(" to ");
   return (
     <li className="rise-in" style={stagger(i)}>
@@ -33,8 +32,8 @@ export function CampaignRow({ c, i = 0 }: { c: CampaignSummary; i?: number }) {
         <span className="col-span-3 min-w-0 md:col-span-1">
           <JourneyMini step={step} className="max-w-[220px]" />
           <span className={clsx("mt-1.5 block truncate text-[13px] font-semibold", needsYou ? "text-ink" : "text-muted")}>
-            {needsYou && <span className="hl">{nextAction(step)}</span>}
-            {!needsYou && (step >= 5 ? "Finished" : nextAction(step))}
+            {needsYou && <span className="hl">{text}</span>}
+            {!needsYou && (step >= 5 ? "Finished" : text)}
           </span>
         </span>
         <span className="col-start-3 row-start-1 flex gap-5 text-right md:col-start-auto md:row-start-auto">

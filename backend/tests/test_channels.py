@@ -11,7 +11,7 @@ from pydantic import SecretStr
 
 from app.channels import meta
 from app.config import get_settings
-from app.db import connection, jsonb
+from app.db import connection, fetch_one, jsonb
 
 FACTS = [{"key": "discount", "label": "Discount", "type": "percent", "value": 15,
           "display": {"en": "15% off", "kn": "ಶೇಕಡಾ 15 ರಷ್ಟು ರಿಯಾಯಿತಿ"}}]
@@ -29,6 +29,8 @@ class FakeMeta:
         if url.endswith("/messages"):
             self.n += 1
             return {"messages": [{"id": f"wamid.out{self.n}"}]}
+        if url.endswith("/me/subscribed_apps"):
+            return {"success": True}
         if url.endswith("/me"):
             return {"user_id": 1789, "username": "kaapikone", "account_type": "BUSINESS"}
         if url.endswith("/1789/media"):
@@ -216,6 +218,7 @@ async def test_instagram_comments_become_sorted_reviews(client, fake_meta, scrip
     assert data["instagram_comments"] == {"praise": 1, "question": 1, "spam": 1}
     mine = {x["author"]: x for x in data["recent"] if x["source"] == "instagram_comment"}
     assert set(mine) == {"asha", "ravi"}  # spam is kept out of the owner's view
+    assert data["instagram"]["hidden"] == 0 and data["instagram"]["checked_at"]  # all 4 counted comments were listed
     q = mine["ravi"]
     assert q["category"] == "question" and q["language"] == "kn" and q["themes"] == ["opening_hours"]
     assert q["translation"] == "Until what time are you open in the evening?" and q["campaign"] == "Channels test"
@@ -236,6 +239,134 @@ async def test_personal_instagram_accounts_are_refused(client, fake_meta, monkey
     monkeypatch.setattr(meta, "graph", personal)
     r = await client.put("/api/businesses/kaapi-kone/channels/instagram", json={"token": "IGAA" + "y" * 40})
     assert r.status_code == 409 and "Business or Creator" in r.json()["detail"]
+
+
+async def test_a_comment_asking_for_the_code_gets_a_personal_one_privately(client, fake_meta, monkeypatch, scripted):
+    from app.channels import instagram
+
+    asset_id, post = await live_post("instagram_post")
+    asks = [{"id": "ask1", "text": "CODE please!", "username": "meera", "timestamp": "2026-10-10T12:00:00+0000"},
+            {"id": "ask2", "text": "nice place", "username": "dev", "timestamp": "2026-10-10T12:01:00+0000"}]
+
+    async def comments(method, url, **kw):
+        if url.endswith("/me/media"):
+            return {"data": [{"id": "9001", "comments_count": len(asks)}]}
+        if url.endswith("/9001/comments"):
+            return {"data": asks}
+        return await fake_meta(method, url, **kw)
+
+    monkeypatch.setattr(meta, "graph", comments)
+    await client.put("/api/businesses/kaapi-kone/channels/instagram", json={"token": "IGAA" + "v" * 40})
+    assert (await client.post(f"/api/assets/{asset_id}/instagram/link", json={"media_id": "9001"})).status_code == 200
+    assert (await client.post("/api/businesses/kaapi-kone/instagram/sync")).json()["comments"] == 2
+
+    sent = [c for c in fake_meta.calls if c[1].endswith("/1789/messages")]
+    assert len(sent) == 1 and sent[0][2]["recipient"] == {"comment_id": "ask1"}  # only the one who asked
+    code = sent[0][2]["message"]["text"].split("Your code: ")[1].split("\n")[0]
+    async with connection() as conn:
+        claim = await fetch_one(conn, "select * from claims where code = %s", (code,))
+        row = await fetch_one(conn, "select reply from customer_interactions where external_id = 'ask1'")
+    assert claim["via"] == "instagram" and claim["touchpoint_code"] == post and len(code) == 7
+    assert code in row["reply"]  # the comment counts as answered
+    async with connection() as conn:
+        from app import services
+
+        assert (await services.find_code(conn, code))["kind"] == "claim"  # the counter knows it
+
+    asks.append({"id": "ask3", "text": "coupon?", "username": "Meera", "timestamp": "2026-10-10T13:00:00+0000"})
+    async with connection() as conn:  # due again: the watch reads without anyone opening a page
+        await conn.execute("update channel_accounts set meta = meta - 'comments_at' where channel = 'instagram'")
+    from app import watch
+    from app.main import app
+
+    assert await watch.once(app.state.router) == 1
+    again = [c for c in fake_meta.calls if c[1].endswith("/1789/messages")][-1][2]
+    assert again["recipient"] == {"comment_id": "ask3"} and f"Your code: {code}" in again["message"]["text"]  # same person, same code
+    assert instagram.wants_code(f"is {post} still on", post) and not instagram.wants_code("decode this", None)
+
+
+async def test_a_dm_asking_for_the_code_gets_one_and_old_posts_get_the_code_line(client, fake_meta, monkeypatch):
+    from app.channels import instagram
+
+    asset_id, post = await live_post("instagram_post")
+
+    async def ig(method, url, **kw):
+        if url.endswith("/igsid1") and method == "GET":
+            return {"username": "Meera"}
+        if url.endswith("/9001/comments") and method == "POST":
+            fake_meta.calls.append((method, url, kw.get("params") or {}))
+            return {"id": "own1"}
+        return await fake_meta(method, url, **kw)
+
+    monkeypatch.setattr(meta, "graph", ig)
+    async with connection() as conn:  # an older post, as other tests may have published 9001 already
+        await conn.execute("delete from instagram_media where media_id = '9001'")
+    await client.put("/api/businesses/kaapi-kone/channels/instagram", json={"token": "IGAA" + "d" * 40})
+    assert any(c[1].endswith("/me/subscribed_apps") and c[2]["subscribed_fields"] == "comments,messages"
+               for c in fake_meta.calls)  # DMs and comments come to the webhook
+    assert (await client.post(f"/api/assets/{asset_id}/instagram/link", json={"media_id": "9001"})).status_code == 200
+    assert (await client.get("/api/public/instagram/webhook", params={
+        "hub.mode": "subscribe", "hub.verify_token": "verify-me", "hub.challenge": "7"})).text == "7"
+
+    def dm(text: str, sender: str = "igsid1", **extra) -> dict:
+        return {"object": "instagram", "entry": [{"id": "1789", "time": 1, "messaging": [
+            {"sender": {"id": sender}, "recipient": {"id": "1789"}, "timestamp": 1, "message": {"mid": "m", "text": text, **extra}}]}]}
+
+    raw, headers = signed(dm("hi"))
+    assert (await client.post("/api/public/instagram/webhook", content=raw,
+                              headers={**headers, "x-hub-signature-256": "sha256=bad"})).status_code == 403
+    for text in ("hello there", "Thanks!"):  # not asking: no reply
+        raw, headers = signed(dm(text))
+        assert (await client.post("/api/public/instagram/webhook", content=raw, headers=headers)).status_code == 200
+    raw, headers = signed(dm("CODE", sender="1789", is_echo=True))  # the business's own message
+    await client.post("/api/public/instagram/webhook", content=raw, headers=headers)
+    assert not [c for c in fake_meta.calls if c[1].endswith("/1789/messages")]
+
+    raw, headers = signed(dm(f"is {post.lower()} on today?"))
+    assert (await client.post("/api/public/instagram/webhook", content=raw, headers=headers)).status_code == 200
+    sent = [c for c in fake_meta.calls if c[1].endswith("/1789/messages")]
+    assert len(sent) == 1 and sent[0][2]["recipient"] == {"id": "igsid1"}
+    code = sent[0][2]["message"]["text"].split("Your code: ")[1].split("\n")[0]
+    async with connection() as conn:
+        claim = await fetch_one(conn, "select * from claims where code = %s", (code,))
+    assert claim["touchpoint_code"] == post and claim["device"] == instagram.device_for("meera")  # same as a comment
+    raw, headers = signed(dm("coupon pls"))
+    await client.post("/api/public/instagram/webhook", content=raw, headers=headers)
+    assert f"Your code: {code}" in [c for c in fake_meta.calls if c[1].endswith("/1789/messages")][-1][2]["message"]["text"]
+
+    # the linked post was made before captions said "Comment CODE": the owner adds it as a comment, once
+    asset = next(a for a in (await client.get(f"/api/campaigns/{claim['campaign_id']}")).json()["assets"]
+                 if a["id"] == asset_id)
+    assert asset["instagram"]["code_line"] is None
+    assert (await client.post(f"/api/assets/{asset_id}/instagram/code-line")).status_code == 200
+    line = [c for c in fake_meta.calls if c[0] == "POST" and c[1].endswith("/9001/comments")][-1][2]["message"]
+    assert post in line and instagram.ASK_FOR_CODE in line
+    assert (await client.post(f"/api/assets/{asset_id}/instagram/code-line")).status_code == 409
+
+
+async def test_comments_instagram_holds_back_are_reported(client, fake_meta, monkeypatch, scripted):
+    """In development mode Instagram counts comments from people without an app role but lists none of them."""
+    async def dev_mode(method, url, **kw):
+        if url.endswith("/me/media"):
+            return {"data": [{"id": "9001", "comments_count": 3}]}
+        if url.endswith("/9001/comments"):
+            return {"data": [], "paging": {"cursors": {}}}
+        return await fake_meta(method, url, **kw)
+
+    monkeypatch.setattr(meta, "graph", dev_mode)
+    await client.put("/api/businesses/kaapi-kone/channels/instagram", json={"token": "IGAA" + "w" * 40})
+    assert (await client.post("/api/businesses/kaapi-kone/instagram/sync")).json()["comments"] == 0
+    assert (await client.get("/api/businesses/kaapi-kone/customers")).json()["instagram"]["hidden"] == 3
+
+
+async def test_one_instagram_account_belongs_to_one_business(client, fake_meta):
+    from tests.test_accounts import NEW_BUSINESS
+
+    assert (await client.put("/api/businesses/kaapi-kone/channels/instagram",
+                             json={"token": "IGAA" + "x" * 40})).status_code == 200
+    other = (await client.post("/api/businesses", json={**NEW_BUSINESS, "name": "Other Cafe"})).json()["slug"]
+    r = await client.put(f"/api/businesses/{other}/channels/instagram", json={"token": "IGAA" + "x" * 40})
+    assert r.status_code == 409 and "already connected to Kaapi Kone" in r.json()["detail"]
 
 
 def test_go_live_checks_every_value_with_meta():
@@ -300,3 +431,82 @@ async def test_reviews_come_only_from_real_visits(client, scripted):
     assert (await client.put("/api/businesses/kaapi-kone/review-link", json={"url": "https://g.page/r/abc/review"})).status_code == 200
     assert (await client.get(f"/api/public/claims/{mine}")).json()["google_review_url"] == "https://g.page/r/abc/review"
     await client.put("/api/businesses/kaapi-kone/review-link", json={"url": ""})
+
+
+async def test_meta_data_deletion_callback_disconnects_and_confirms(client, fake_meta):
+    import base64
+
+    def signed_request(data: dict, secret: bytes = b"app-secret") -> str:
+        payload = base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip("=")
+        sig = base64.urlsafe_b64encode(hmac.new(secret, payload.encode(), hashlib.sha256).digest()).decode().rstrip("=")
+        return f"{sig}.{payload}"
+
+    await client.put("/api/businesses/kaapi-kone/channels/instagram", json={"token": "IGAA" + "z" * 40})
+    form = {"content-type": "application/x-www-form-urlencoded"}
+    forged = signed_request({"algorithm": "HMAC-SHA256", "user_id": "1789"}, b"not-the-secret")
+    assert (await client.post("/api/public/meta/data-deletion", content=f"signed_request={forged}", headers=form)).status_code == 400
+
+    good = signed_request({"algorithm": "HMAC-SHA256", "user_id": "1789", "issued_at": 1})
+    r = await client.post("/api/public/meta/data-deletion", content=f"signed_request={good}", headers=form)
+    assert r.status_code == 200 and r.json()["url"].endswith(f"/data-deletion?code={r.json()['confirmation_code']}")
+    assert (await client.get("/api/businesses/kaapi-kone/channels")).json()["instagram"] is None  # token gone
+    status = (await client.get(f"/api/public/meta/data-deletion/{r.json()['confirmation_code']}")).json()
+    assert status["status"] == "done"
+    again = await client.post("/api/public/meta/data-deletion", content=f"signed_request={good}", headers=form)
+    assert again.json()["confirmation_code"] == "NOTHING-STORED"
+    assert (await client.get("/api/public/meta/data-deletion/NOPE")).status_code == 404
+
+
+async def test_instagram_overview_shows_account_numbers_and_each_posts_comments(client, fake_meta, monkeypatch, scripted):
+    """Followers, 28-day totals, daily reach, and per post: likes, comments, reach, saves, shares and the comments read."""
+    async with connection() as conn:
+        await conn.execute("delete from customer_interactions where source = 'instagram_comment'")
+
+    async def ig(method, url, **kw):
+        p = kw.get("params") or {}
+        if url.endswith("/me") and "followers_count" in p.get("fields", ""):
+            fake_meta.calls.append((method, url, p))
+            return {"username": "kaapikone", "followers_count": 120, "media_count": 2}
+        if url.endswith("/me/insights"):
+            fake_meta.calls.append((method, url, p))
+            if p.get("metric_type") == "total_value":
+                return {"data": [{"name": "reach", "total_value": {"value": 310}}, {"name": "likes", "total_value": {"value": 40}}]}
+            return {"data": [{"name": "reach", "values": [{"end_time": "2026-10-23T07:00:00+0000", "value": 12},
+                                                           {"end_time": "2026-10-24T07:00:00+0000", "value": 30}]}]}
+        if url.endswith("/me/media") and "like_count" in p.get("fields", ""):
+            return {"data": [{"id": "9001", "caption": "Evening coffee", "like_count": 18, "comments_count": 6,
+                              "permalink": "https://instagram.com/p/x", "media_url": "https://cdn/x.jpg"}]}
+        return await fake_meta(method, url, **kw)
+
+    monkeypatch.setattr(meta, "graph", ig)
+    await client.put("/api/businesses/kaapi-kone/channels/instagram", json={"token": "IGAA" + "o" * 40})
+    scripted.push(text_reply(json.dumps({"comments": [
+        {"n": 0, "category": "praise", "sentiment": 0.9, "themes": ["filter_coffee"], "language": "en", "english": None},
+        {"n": 1, "category": "question", "sentiment": 0, "themes": ["opening_hours"], "language": "kn", "english": "Open till when?"},
+        {"n": 2, "category": "spam", "sentiment": 0.5, "themes": ["followers"], "language": "en", "english": None}]})))
+    await client.post("/api/businesses/kaapi-kone/instagram/sync")
+
+    o = (await client.get("/api/businesses/kaapi-kone/instagram/overview")).json()
+    assert o["connected"] and o["profile"]["followers_count"] == 120
+    assert o["totals"] == {"reach": 310, "likes": 40} and [s["reach"] for s in o["series"]] == [12, 30]
+    post = o["posts"][0]
+    assert post["likes"] == 18 and post["reach"] == 200 and post["saved"] == 4 and post["shares"] == 5
+    assert {c["author"] for c in post["read"]} == {"asha", "ravi"}  # spam and the business's own reply left out
+    assert post["held_back"] == 0  # FakeMeta lists all 4 comments it counts on 9001
+    async with connection() as conn:  # a later read where Instagram listed fewer than it counted
+        await conn.execute("""update channel_accounts set meta = meta || '{"comments_hidden_by_post": {"9001": 2}}'
+                              where channel = 'instagram'""")
+    o = (await client.get("/api/businesses/kaapi-kone/instagram/overview")).json()
+    assert o["posts"][0]["held_back"] == 2 and o["held_back"] == 2
+
+    reads = len([c for c in fake_meta.calls if c[1].endswith("/me/insights")])
+    await client.get("/api/businesses/kaapi-kone/instagram/overview")  # cached: Meta is not read again
+    assert len([c for c in fake_meta.calls if c[1].endswith("/me/insights")]) == reads
+    await client.get("/api/businesses/kaapi-kone/instagram/overview", params={"refresh": "true"})
+    assert len([c for c in fake_meta.calls if c[1].endswith("/me/insights")]) == reads + 2
+
+
+def text_reply(body: str):
+    from tests.fakes import text
+
+    return text(body)

@@ -2,7 +2,8 @@
 
 A plan is audience x channel x language cells. The Brief agent proposes it; these rules refuse a plan that the
 rest of the team could not carry out: a language the business does not use, a channel that does not exist, too
-many posts for one campaign, or a goal without a number to judge it by.
+many posts for one campaign, a goal without a number to judge it by, or a connected Instagram account left out
+(the owner connected it so campaigns post there).
 """
 
 from typing import Any
@@ -12,7 +13,8 @@ MAX_CELLS = 12
 MAX_AUDIENCES = 3
 
 
-def problems(goal: dict[str, Any], plan: dict[str, Any], languages: list[str]) -> list[str]:
+def problems(goal: dict[str, Any], plan: dict[str, Any], languages: list[str], connected: frozenset[str] = frozenset()
+             ) -> list[str]:
     out = []
     cells = plan.get("cells") or []
     if not cells:
@@ -29,6 +31,10 @@ def problems(goal: dict[str, Any], plan: dict[str, Any], languages: list[str]) -
             out.append(f"The business does not use language {c.get('language')!r}; it uses {', '.join(languages)}.")
         if not str(c.get("segment") or "").strip():
             out.append("Every cell needs an audience (segment).")
+    if "instagram" in connected and cells and not any(
+            isinstance(c, dict) and str(c.get("channel")).startswith("instagram") for c in cells):
+        out.append("Instagram is connected, so the owner expects this campaign there: add at least one "
+                   "instagram_post cell.")
     audiences = {str(c.get("segment")).casefold() for c in cells if isinstance(c, dict) and c.get("segment")}
     if len(audiences) > MAX_AUDIENCES:
         out.append(f"{len(audiences)} audiences spreads one campaign thin; pick at most {MAX_AUDIENCES}.")

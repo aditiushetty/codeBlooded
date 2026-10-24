@@ -68,6 +68,10 @@ export interface CampaignSummary {
   redemptions: number;
   live: number;
   cover_url: string | null;
+  ready?: number; // posts checked and waiting for approval
+  facts?: "draft" | "locked" | null;
+  last_run?: "agent.started" | "agent.finished" | "agent.failed" | null;
+  working?: boolean; // an agent is on it right now
 }
 
 export interface Overview {
@@ -157,7 +161,7 @@ export interface Asset {
   outcomes: Record<string, number> | null;
   image_url: string | null;
   image_source?: { source: Photo["source"]; attribution?: string | null; caption?: string | null } | null;
-  instagram?: { media_id: string; permalink: string | null } | null;
+  instagram?: { media_id: string; permalink: string | null; code_line?: "caption" | "comment" | null } | null;
 }
 
 export interface ExperimentArm {
@@ -211,15 +215,18 @@ export interface ResultRow {
   scans: number;
   claims: number;
   redeemed: number;
+  /** Redeemed with a code got from this post's link (conversion counts only these; a post code typed at the counter does not). */
+  from_link: number;
   sales: number;
   link: string;
   conversion: number | null;
 }
 export interface Results {
   posts: ResultRow[];
-  totals: { scans: number; claims: number; redeemed: number; came_back: number; sales: number; simulated: number; conversion: number | null };
+  totals: { scans: number; claims: number; redeemed: number; came_back: number; from_link: number; sales: number; simulated: number; conversion: number | null };
   ai?: AiCost;
   effort?: { campaigns: number; taps: number; minutes: number; waiting_minutes: number } | null;
+  hours?: { hour: number; active: number }[] | null; // when customers were active, last 60 days
 }
 
 export interface Photo {
@@ -281,6 +288,7 @@ export interface FunnelGroup {
   scans: number;
   claims: number;
   redeems: number;
+  from_link: number;
   conversion: number | null;
   likely: [number, number] | null;
 }
@@ -298,7 +306,8 @@ export interface Analytics {
   /** Come-back codes: days valid (null = off), issued after a first visit, used, still open. */
   repeat?: { days: number | null; issued: number; came_back: number; waiting: number; rate: number | null };
   daily: { date: string; scans: number; claims: number; redeems: number }[];
-  hours: { hour: number; scans: number; redeems: number }[];
+  hours: { hour: number; scans: number; claims: number; redeems: number; comments: number; active: number }[];
+  hours_overall?: { hour: number; active: number }[] | null; // the whole business, when this campaign has nothing yet
   by: { channel: FunnelGroup[]; language: FunnelGroup[]; segment: FunnelGroup[] };
   posts: (FunnelGroup & { asset_id: string; code: string; channel: Channel; language: Lang; segment: string; variant: string | null; headline: string | null })[];
   simulated: number;

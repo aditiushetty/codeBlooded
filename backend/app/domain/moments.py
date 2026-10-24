@@ -7,6 +7,7 @@ Every moment says where it came from, so the Scout agent never has to invent one
 Pure: the forecast and event rows are passed in.
 """
 
+import re
 from datetime import date, timedelta
 from typing import Any
 
@@ -33,12 +34,12 @@ def from_weather(days: list[dict[str, Any]], today: date) -> list[dict[str, Any]
             out.append({"key": f"rain-{day}", "kind": "weather", "title": f"Rain likely {evening}",
                         "starts_on": day.isoformat(), "ends_on": day.isoformat(), "when": when,
                         "detail": f"{d['evening_rain_pct']}% chance of rain between 4 and 9 pm",
-                        "source": "Open-Meteo forecast", "hint": "people stay in or look for somewhere warm nearby"})
+                        "source": "Open-Meteo forecast", "hint": "outdoor plans change; people look for something to do indoors nearby"})
         elif (d.get("tmax") or 0) >= HOT:
             out.append({"key": f"hot-{day}", "kind": "weather", "title": f"Hot afternoon {when}",
                         "starts_on": day.isoformat(), "ends_on": day.isoformat(), "when": when,
                         "detail": f"up to {round(d['tmax'])}°C", "source": "Open-Meteo forecast",
-                        "hint": "cold drinks and a cool place to sit"})
+                        "hint": "people avoid the afternoon heat and go out early or late"})
     return out
 
 
@@ -50,7 +51,7 @@ def calendar(today: date, days: int = 10) -> list[dict[str, Any]]:
         when = "this weekend" if (sat - today).days < 6 else f"weekend of {sat:%-d %b}"
         out.append({"key": f"weekend-{sat}", "kind": "calendar", "title": f"The weekend ({sat:%a %-d} and {sun:%a %-d %b})",
                     "starts_on": sat.isoformat(), "ends_on": sun.isoformat(), "when": when, "detail": None,
-                    "source": "Calendar", "hint": "families and friends out together, slower mornings"})
+                    "source": "Calendar", "hint": "more free time; families and friends go out together"})
     # Salary week: the last days of the month and the first of the next, when people spend more freely.
     first_next = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
     start = first_next - timedelta(days=3)
@@ -58,7 +59,7 @@ def calendar(today: date, days: int = 10) -> list[dict[str, Any]]:
         out.append({"key": f"payday-{first_next:%Y-%m}", "kind": "calendar", "title": "Salary week",
                     "starts_on": max(start, today).isoformat(), "ends_on": (first_next + timedelta(days=2)).isoformat(),
                     "when": _label(max(start, today), today), "detail": "end of the month and the first days of the next",
-                    "source": "Calendar", "hint": "people treat themselves and their teams"})
+                    "source": "Calendar", "hint": "people spend more freely, on themselves and others"})
     return out
 
 
@@ -79,6 +80,27 @@ def from_events(rows: list[dict[str, Any]], today: date, days: int = 14) -> list
                     "source": "You added this" if owner else "Your business calendar",
                     "hint": data.get("hook"), "removable": owner})
     return out
+
+
+# Food and drink words. An idea that names one the business does not sell is off its trade (a gym was offered
+# "warm beverages and comfort food" for a rainy evening), so it is dropped whatever the model says.
+FOOD_WORDS = ("coffee", "tea", "chai", "drink", "beverage", "food", "snack", "meal", "breakfast", "lunch", "dinner",
+              "pastry", "pastries", "cake", "dessert", "sweet", "pakoda", "pakora", "vada", "dosa", "idli", "biryani",
+              "samosa", "juice", "shake", "smoothie", "sandwich", "burger", "pizza", "soup", "bakery", "combo")
+
+
+GENERIC_FOOD = {"drink", "beverage", "food", "snack", "meal", "breakfast", "lunch", "dinner", "combo", "sweet", "dessert"}
+FOOD_KINDS = ("café", "cafe", "coffee", "restaurant", "bakery", "hotel", "dhaba", "mess", "canteen", "kitchen", "food",
+              "tea", "juice", "sweet", "eatery", "bar", "pub", "tiffin", "darshini", "caterer", "cake", "ice cream")
+
+
+def off_trade(text: str, sells: list[str], kind: str = "") -> list[str]:
+    """Food and drink words in `text` this business does not sell. A food business may use the generic words
+    (drink, snack, combo); a specific dish or drink must be one of its own items either way."""
+    t, own = text.casefold(), " ".join(sells).casefold()
+    food = any(k in kind.casefold() for k in FOOD_KINDS)
+    return [w for w in FOOD_WORDS if re.search(rf"\b{w}(e?s)?\b", t) and w not in own
+            and not (food and w in GENERIC_FOOD)]
 
 
 def merge(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:

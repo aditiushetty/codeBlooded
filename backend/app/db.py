@@ -1,6 +1,7 @@
 """Thin async Postgres access. Plain SQL, dict rows, one pool per process."""
 
 import json
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -21,7 +22,23 @@ async def _configure(conn: AsyncConnection) -> None:
     conn.prepare_threshold = None
 
 
-async def open_pool(dsn: str, *, min_size: int = 1, max_size: int = 8) -> AsyncConnectionPool:
+_used: dict[int, float] = {}  # connection id -> when it was last handed back
+FRESH_SECONDS = 20
+
+
+async def _check(conn: AsyncConnection) -> None:
+    """A laptop sleep or the Supabase pooler's idle timeout silently kills pooled connections, so a connection that
+    sat unused is tested before it is handed out (one round trip). One used a moment ago is not: a page loads
+    several resources at once, and testing each would add a round trip to every request."""
+    if time.monotonic() - _used.get(id(conn), 0) > FRESH_SECONDS:
+        await AsyncConnectionPool.check_connection(conn)
+
+
+async def _returned(conn: AsyncConnection) -> None:
+    _used[id(conn)] = time.monotonic()
+
+
+async def open_pool(dsn: str, *, min_size: int = 4, max_size: int = 12) -> AsyncConnectionPool:
     global _pool
     _pool = AsyncConnectionPool(
         dsn,
@@ -29,9 +46,8 @@ async def open_pool(dsn: str, *, min_size: int = 1, max_size: int = 8) -> AsyncC
         max_size=max_size,
         kwargs={"row_factory": dict_row, "autocommit": False},
         configure=_configure,
-        # A laptop sleep or the Supabase pooler's idle timeout silently kills pooled connections; test each one as
-        # it is handed out and replace a dead one, instead of failing that request with a 500.
-        check=AsyncConnectionPool.check_connection,
+        check=_check,  # replace a dead connection instead of failing that request with a 500
+        reset=_returned,
         open=False,
     )
     await _pool.open(wait=True)

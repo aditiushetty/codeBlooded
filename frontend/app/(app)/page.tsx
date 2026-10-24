@@ -1,9 +1,10 @@
 "use client";
 
-import { ArrowRight, Check } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowRight, Check } from "@phosphor-icons/react";
 import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { CampaignLedger } from "@/components/campaign-card";
 import { Composer } from "@/components/composer";
 import { FestivalCard } from "@/components/festival-card";
@@ -14,8 +15,8 @@ import { Shell } from "@/components/shell";
 import { Empty, SectionHeading, Skeleton, stagger } from "@/components/ui";
 import { api, useResource } from "@/lib/api";
 import { useBusiness } from "@/lib/business";
-import { nextAction, stepOfSummary } from "@/lib/journey";
-import type { CampaignDetail, Festival, Overview } from "@/lib/types";
+import { summaryState } from "@/lib/journey";
+import type { CampaignDetail, CampaignSummary, Festival, Overview } from "@/lib/types";
 
 function greeting() {
   const h = new Date().getHours();
@@ -97,6 +98,53 @@ function GettingStarted({ campaigns, live }: { campaigns: number; live: number }
   );
 }
 
+/** A campaign waiting on the owner: a link to the step to do, or "Carry on" when the agent stopped part way. */
+function WaitingRow({ c }: { c: CampaignSummary }) {
+  const st = summaryState(c);
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+  const text = (
+    <span className="min-w-0 flex-1">
+      <span className="block text-[19px] font-bold leading-snug [font-stretch:90%]">{sent ? "Counterpart is carrying on" : st.text}</span>
+      <span className="block text-[14px] text-ink-2">{c.name}</span>
+    </span>
+  );
+  const btn = "inline-flex h-10 items-center gap-1.5 rounded-[var(--radius-sm)] bg-ink px-4 text-[14px] font-semibold text-white";
+  if (st.stalled)
+    return (
+      <li className="flex items-center gap-4 py-4">
+        <Link href={`/campaigns/${c.id}`} className="min-w-0 flex-1 hover:underline">
+          {text}
+        </Link>
+        <button
+          disabled={busy || sent}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await api(`/campaigns/${c.id}/agent`, { method: "POST", json: { message: "Carry on with the campaign from where you stopped." } });
+              setSent(true);
+            } finally {
+              setBusy(false);
+            }
+          }}
+          className={clsx("press", btn, "disabled:opacity-60")}
+        >
+          <ArrowClockwise size={14} weight="bold" aria-hidden /> {sent ? "Started" : busy ? "Starting…" : "Carry on"}
+        </button>
+      </li>
+    );
+  return (
+    <li>
+      <Link href={`/campaigns/${c.id}#${st.step === 1 ? "offer" : "posts"}`} className="group flex items-center gap-4 py-4">
+        {text}
+        <span className={btn}>
+          Open <ArrowRight size={14} weight="bold" className="transition-transform duration-200 group-hover:translate-x-0.5" aria-hidden />
+        </span>
+      </Link>
+    </li>
+  );
+}
+
 export default function Today() {
   const router = useRouter();
   const business = useBusiness();
@@ -119,7 +167,8 @@ export default function Today() {
   const redeemed = current.reduce((n, c) => n + c.redemptions, 0);
   const approvals = data?.inbox.filter((i) => i.kind === "approval" || i.kind === "question") ?? [];
   // Campaigns waiting on the owner that have no inbox item of their own (e.g. posts ready to approve).
-  const waiting = current.filter((c) => [1, 2].includes(stepOfSummary(c)) && !approvals.some((a) => a.campaign_id === c.id));
+  const waiting = current.filter((c) => summaryState(c).you && !approvals.some((a) => a.campaign_id === c.id));
+  const noticed = (data?.findings ?? []).filter((f) => !(f.kind === "event_upcoming" && festivals.some((x) => x.key === f.festival)));
 
   async function newBrief(text: string) {
     const c = await api<{ id: string }>(`/businesses/${business.slug}/campaigns`, { method: "POST", json: { brief: text } });
@@ -162,17 +211,7 @@ export default function Today() {
           {waiting.length > 0 && (
             <ul className="mt-4 divide-y divide-ink/15 border-t border-ink">
               {waiting.map((c) => (
-                <li key={c.id}>
-                  <Link href={`/campaigns/${c.id}#${stepOfSummary(c) === 1 ? "offer" : "posts"}`} className="group flex items-center gap-4 py-4">
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[19px] font-bold leading-snug [font-stretch:90%]">{nextAction(stepOfSummary(c))}</span>
-                      <span className="block text-[14px] text-ink-2">{c.name}</span>
-                    </span>
-                    <span className="inline-flex h-10 items-center gap-1.5 rounded-[var(--radius-sm)] bg-ink px-4 text-[14px] font-semibold text-white">
-                      Open <ArrowRight size={14} weight="bold" className="transition-transform duration-200 group-hover:translate-x-0.5" aria-hidden />
-                    </span>
-                  </Link>
-                </li>
+                <WaitingRow key={c.id} c={c} />
               ))}
             </ul>
           )}
@@ -197,11 +236,6 @@ export default function Today() {
         </div>
       </section>
 
-      <section className="mt-16" aria-labelledby="around-h">
-        <SectionHeading id="around-h" title="Happening around you" className="border-b-0" sub="The weather, the calendar and the events you add. The Scout turns them into campaigns that fit your menu." />
-        <AroundYou slug={business.slug} onStart={newBrief} />
-      </section>
-
       <section className="mt-16" aria-labelledby="camp-h">
         <SectionHeading
           id="camp-h"
@@ -222,6 +256,11 @@ export default function Today() {
         )}
       </section>
 
+      <section className="mt-16" aria-labelledby="around-h">
+        <SectionHeading id="around-h" title="Happening around you" className="border-b-0" sub="The weather, the calendar and the events you add. The Scout turns them into campaigns that fit your menu." />
+        <AroundYou slug={business.slug} onStart={newBrief} />
+      </section>
+
       {festivals.length > 0 && (
         <section className="mt-16" aria-labelledby="fest-h">
           <SectionHeading id="fest-h" title="Festivals coming up" className="border-b-0" sub="Greetings checked by hand in your languages, the customs people follow, and ideas that fit your business." />
@@ -233,10 +272,12 @@ export default function Today() {
         </section>
       )}
 
-      <section className="mt-16 max-w-[760px]" aria-labelledby="noticed-h">
-        <SectionHeading id="noticed-h" title="Counterpart noticed" className="border-b-0" sub="From your calendar, your reviews and your campaigns." />
-        {data ? <FindingsList findings={data.findings.filter((f) => !(f.kind === "event_upcoming" && festivals.some((x) => x.key === f.festival)))} /> : <Skeleton className="h-32" />}
-      </section>
+      {noticed.length > 0 && (
+        <section className="mt-16 max-w-[760px]" aria-labelledby="noticed-h">
+          <SectionHeading id="noticed-h" title="Counterpart noticed" className="border-b-0" sub="From your calendar, your reviews and your campaigns." />
+          <FindingsList findings={noticed} />
+        </section>
+      )}
     </Shell>
   );
 }

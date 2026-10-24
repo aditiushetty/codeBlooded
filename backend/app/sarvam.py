@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 
+from app import keys
 from app.config import get_settings
 
 log = logging.getLogger(__name__)
@@ -44,11 +45,13 @@ def _headers() -> dict[str, str]:
 
 def _raise_for(r: httpx.Response) -> None:
     if r.status_code == 200:
+        keys.sarvam_result(True)
         return
     try:
         msg = (r.json().get("error") or {}).get("message") or r.text[:200]
     except ValueError:
         msg = r.text[:200]
+    keys.sarvam_result(False, f"{r.status_code} {msg}")
     raise SarvamError(f"Sarvam {r.status_code}: {msg}")
 
 

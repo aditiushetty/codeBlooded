@@ -106,7 +106,7 @@ def test_margin_check_without_costs_says_so():
 
 async def test_results_report_conversion_per_post(client):
     r = (await client.get("/api/businesses/kaapi-kone/results")).json()
-    assert set(r["totals"]) == {"scans", "claims", "redeemed", "came_back", "sales", "simulated", "conversion"}
+    assert set(r["totals"]) == {"scans", "claims", "redeemed", "came_back", "from_link", "sales", "simulated", "conversion"}
     for p in r["posts"]:
         assert p["link"].endswith("/r/" + p["code"])
 
@@ -238,6 +238,8 @@ async def test_scout_ideas_ride_on_real_moments_and_menu_items(client, scripted,
         idea | {"moment_key": "event-own-ipl-rcb-vs-csk"},
         idea | {"moment_key": "event-ipl-final-made-up", "title": "Invented match"},  # not a real moment
         idea | {"moment_key": f"rain-{today}", "title": "Rainy pizza", "items": ["Pizza"]},  # not on the menu
+        idea | {"moment_key": f"rain-{today}", "title": "Rainy biryani", "brief": "Biryani and filter coffee for the rain",
+                "items": ["filter coffee"]},  # names a dish the café does not sell
     ]})))
     out = (await client.post("/api/businesses/kaapi-kone/opportunities")).json()
     assert [i["title"] for i in out["ideas"]] == ["Match night kaapi"]

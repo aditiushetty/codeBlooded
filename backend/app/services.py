@@ -547,7 +547,8 @@ async def claim(conn: Conn, post_code: str, *, device: str | None, via: str = "w
                      values (%s, %s, %s, %s, %s, %s) on conflict do nothing returning *""",
             (code, tp["code"], tp["campaign_id"], tp["asset_id"], device, via))
         if row:
-            await record_outcome(conn, tp["code"], "click", source="live", meta={"claim": code, "via": via})
+            if via != "invite":  # a code the owner made for their list is not the customer asking: no "claimed" yet
+                await record_outcome(conn, tp["code"], "click", source="live", meta={"claim": code, "via": via})
             return row, True
         if device and (row := await fetch_one(conn, "select * from claims where campaign_id = %s and device = %s",
                                              (tp["campaign_id"], device))):

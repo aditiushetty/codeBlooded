@@ -90,7 +90,9 @@ async def me(user: CurrentUser) -> dict[str, Any]:
                      where m.user_id = %s order by b.is_demo, b.created_at""", (user.id,))
     s = get_settings()
     return {"user": user.model_dump(), "businesses": rows,
-            "features": {"google_photos": s.google_maps_api_key is not None, "sarvam": s.sarvam_api_key is not None}}
+            "features": {"google_photos": s.google_maps_api_key is not None, "sarvam": s.sarvam_api_key is not None,
+                         # customer links and QR codes are built from this address on every request
+                         "public_links": s.public_base_url.startswith("https://")}}
 
 
 # ------------------------------------------------------------------ onboarding
@@ -124,7 +126,7 @@ class Phrase(BaseModel):
 class BrandDraft(BaseModel):
     voice: list[str] = Field(description="3 to 5 plain adjectives for how the owner talks to regulars "
                                          "(e.g. 'chatty', 'no-nonsense'), never marketing words like 'vibrant'.")
-    do: list[str] = Field(description="2 to 4 short, concrete writing rules, e.g. 'name the dish, not the "
+    do: list[str] = Field(description="2 to 4 short, concrete writing rules, e.g. 'name the product or service, not the "
                                       "experience'.")
     avoid: list[str] = Field(description="2 to 4 things never to do.")
     signature_phrases: list[Phrase] = Field(description="One short sign-off line per language, natively written.")
@@ -363,6 +365,27 @@ async def menu_speech(user: CurrentUser, body: SpokenMenu, request: Request) -> 
     except ProviderError as e:
         raise services.Conflict(f"Could not read the menu right now ({str(e)[:120]}). Try again soon.") from e
     return {"said": said, "language": language, "english": english, "items": items}
+
+
+class MenuPhoto(BaseModel):
+    data_url: str = Field(max_length=8_000_000, description="A photo of the printed menu, as an image data URL.")
+
+
+@accounts.post("/onboarding/menu-photo")
+async def menu_photo(user: CurrentUser, body: MenuPhoto, request: Request) -> dict[str, Any]:
+    """Items and prices read from a photo of the menu. Nothing is saved; the owner checks every price."""
+    if not re.match(r"^data:image/(jpeg|png|webp);base64,", body.data_url):
+        raise services.Conflict("Send a JPEG, PNG or WebP photo of the menu.")
+    router = get_router(request)
+    if not router.available("vision"):
+        raise services.Conflict("No AI model that reads pictures is set up on this server; type the items instead.")
+    from app.providers.base import ProviderError
+
+    try:
+        items = await autofill.menu_from_photo(router, body.data_url)
+    except ProviderError as e:
+        raise services.Conflict(f"Could not read the photo right now ({str(e)[:120]}). Try again soon.") from e
+    return {"items": items}
 
 
 # ------------------------------------------------------------------ customer reviews
@@ -632,6 +655,9 @@ async def results(user: CurrentUser, slug: str) -> dict[str, Any]:
                                      and not coalesce((o.meta->>'return')::boolean, false)), 0)::int as redeemed,
                             coalesce(sum(o.qty) filter (where o.type = 'redeem'
                                      and coalesce((o.meta->>'return')::boolean, false)), 0)::int as came_back,
+                            coalesce(sum(o.qty) filter (where o.type = 'redeem' and not coalesce((o.meta->>'return')::boolean, false)
+                                     and (coalesce((o.meta->>'from_link')::boolean, false) or exists (
+                              select 1 from claims cl where cl.code = o.meta->>'claim' and cl.via = 'web'))), 0)::int as from_link,
                             coalesce(sum((o.meta->>'bill_amount')::numeric) filter (where o.type = 'redeem'), 0)::float
                               as sales,
                             coalesce(sum(o.qty) filter (where o.source = 'simulated'), 0)::int as simulated
@@ -642,13 +668,17 @@ async def results(user: CurrentUser, slug: str) -> dict[str, Any]:
     base = get_settings().public_base_url.rstrip("/")
     for r in rows:
         r["link"] = f"{base}/r/{r['code']}"
-        r["conversion"] = round(r["redeemed"] / r["scans"], 4) if r["scans"] else None
-    totals = {k: sum(r[k] for r in rows) for k in ("scans", "claims", "redeemed", "came_back", "sales", "simulated")}
-    totals["conversion"] = round(totals["redeemed"] / totals["scans"], 4) if totals["scans"] else None
+        # Conversion = of the people who opened the link, how many came in with the code they got there. A post's code
+        # typed at the counter (from a caption or poster) counts as redeemed, never as a link conversion.
+        r["conversion"] = round(r["from_link"] / r["scans"], 4) if r["scans"] else None
+    totals = {k: sum(r[k] for r in rows) for k in ("scans", "claims", "redeemed", "came_back", "from_link", "sales",
+                                                    "simulated")}
+    totals["conversion"] = round(totals["from_link"] / totals["scans"], 4) if totals["scans"] else None
     async with connection() as conn:
         spent = await usage.spent(conn, business_id=b["id"])
         live = {r["campaign_id"] for r in rows}
         efforts = [await results_mod.effort_for(conn, cid) for cid in live]
-    return {"posts": rows, "totals": totals,
+        hours = await results_mod.business_hours(conn, b["id"])
+    return {"posts": rows, "totals": totals, "hours": hours,
             "ai": {**spent, **economics.return_on_ai(spent["rupees"], totals["sales"], totals["redeemed"])},
             "effort": effort.typical([e for e in efforts if e])}

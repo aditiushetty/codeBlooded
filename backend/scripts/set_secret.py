@@ -12,6 +12,7 @@
     uv run python -m scripts.set_secret GEMINI_API_KEY_2    (a second Google project's key, aistudio.google.com)
     uv run python -m scripts.set_secret SARVAM_API_KEY      (Kannada/Hindi voice and translation, dashboard.sarvam.ai)
     uv run python -m scripts.set_secret META_APP_SECRET     (Meta app > App settings > Basic > App secret)
+    uv run python -m scripts.set_secret INSTAGRAM_APP_SECRET  (Meta app > Instagram > API setup > Instagram app secret)
     uv run python -m scripts.set_secret WHATSAPP_VERIFY_TOKEN (any phrase you choose; type the same into Meta's webhook form)
 
 The value is typed hidden and checked against the service before it is saved.
@@ -39,6 +40,7 @@ ALLOWED = {
     "CEREBRAS_API_KEY": "Cerebras API key (cloud.cerebras.ai > API Keys, csk-...)",
     "SARVAM_API_KEY": "Sarvam AI API subscription key (dashboard.sarvam.ai > API Keys)",
     "META_APP_SECRET": "Meta app secret (developers.facebook.com > your app > App settings > Basic > App secret)",
+    "INSTAGRAM_APP_SECRET": "Instagram app secret (Meta app > Instagram > API setup with Instagram login > Instagram app secret)",
     "GOOGLE_OAUTH_CLIENT_SECRET": "Google Cloud OAuth client secret (web client; set GOOGLE_OAUTH_CLIENT_ID in .env too)",
     "WHATSAPP_VERIFY_TOKEN": "A phrase of your choice, 8+ characters; type the same one as 'Verify token' in Meta's webhook form",
 }
@@ -72,7 +74,7 @@ def check(name: str, value: str) -> str | None:
         headers = {"apikey": value, **({"Authorization": f"Bearer {value}"} if value.startswith("eyJ") else {})}
         r = httpx.get(f"{base}/auth/v1/admin/users", params={"per_page": 1}, headers=headers, timeout=15)
         return None if r.status_code == 200 else f"Supabase said {r.status_code}; check you copied the secret key"
-    if name == "META_APP_SECRET":  # Meta cannot check it without the app id; the shape catches copy mistakes
+    if name in ("META_APP_SECRET", "INSTAGRAM_APP_SECRET"):  # Meta cannot check it without the app id; the shape catches copy mistakes
         return None if len(value) == 32 and all(c in "0123456789abcdef" for c in value.lower()) else \
             "an app secret is 32 letters and digits (0-9, a-f); press Show next to App secret and copy all of it"
     if name in ("DEMO_PASSWORD", "OWNER_API_TOKEN"):

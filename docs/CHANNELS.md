@@ -142,6 +142,19 @@ It worked if every line starts with ✓:
 3. **Verify token:** run `grep WHATSAPP_VERIFY_TOKEN backend/.env` and paste the value after the `=`.
 4. Press **Verify and save**. Then press **Manage** and subscribe to **messages**.
 
+**Instagram DMs and instant comments (webhook)**
+Without this, comments are still read every 3 minutes. With it, a DM saying CODE (or a post's code) gets a personal code back, and comments arrive at once.
+1. Save two secrets (hidden prompt, from `backend/`): `uv run python -m scripts.set_secret INSTAGRAM_APP_SECRET` (dashboard: **Instagram → API setup with Instagram login → Instagram app secret**) and `uv run python -m scripts.set_secret WHATSAPP_VERIFY_TOKEN` (any phrase; it's shared by both webhooks). Restart the backend.
+2. Start the tunnel and set `PUBLIC_BASE_URL` (Step 5 does both).
+3. In the dashboard, go to **API setup with Instagram login → Configure webhooks**. **Callback URL:** `<PUBLIC_BASE_URL>/api/public/instagram/webhook`. **Verify token:** the phrase from step 1. Press **Verify and save**, then subscribe to **comments** and **messages**.
+4. Connecting Instagram on the Channels page subscribes the account by itself. For an account connected before this change (2026-10-24), paste its token again.
+5. In development mode Meta delivers only testers' DMs and comments.
+
+**Older posts and "Comment CODE"**
+Instagram's API can't edit a caption (it answers that only `comment_enabled` can change). Posts published before the caption carried the line show **Add "Comment CODE"** on their card. It posts the line as your own comment.
+
+**Taking the app live** — see `docs/GO_LIVE.md`.
+
 **Security**
 - Meta signs every webhook message with your app secret, and anything unsigned is refused.
 - Tokens stay in `backend/.env` and the database, never in the browser.

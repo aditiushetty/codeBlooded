@@ -24,6 +24,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLedgerEvents } from "@/lib/api";
 import { useWorkspace } from "@/lib/business";
 import { useWorkLog } from "@/lib/worklog";
+import { KeyStatus } from "./key-status";
 import { Receipt } from "./receipt";
 
 // Two groups: the work (a campaign's flow) and the business it draws on.
@@ -98,8 +99,8 @@ function BusinessMenu() {
         aria-haspopup="menu"
         className="press flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1 text-left hover:bg-ink/[0.05]"
       >
-        <span className="min-w-0 leading-none">
-          <span className="block max-w-[170px] truncate text-[18px] font-bold [font-stretch:90%]">{business.name}</span>
+        <span className="block min-w-0 leading-none">
+          <span className="block max-w-[130px] truncate xl:max-w-[170px] text-[18px] font-bold [font-stretch:90%]">{business.name}</span>
           <span className="mt-1 block text-[12px] text-muted">{business.is_demo ? "Demo business" : (business.kind ?? business.locality)}</span>
         </span>
         <CaretDown size={13} weight="bold" className={clsx("shrink-0 text-muted transition-transform", open && "rotate-180")} aria-hidden />
@@ -126,6 +127,7 @@ function BusinessMenu() {
             </button>
           ))}
           <div className="my-1.5 h-px bg-line" />
+          <WorkLogToggle menu />
           <Link href="/onboarding" role="menuitem" className="press flex items-center gap-3 rounded-[var(--radius-sm)] px-3 py-2 text-[15px] hover:bg-sunken">
             <Plus size={16} aria-hidden /> Add a business
           </Link>
@@ -139,8 +141,18 @@ function BusinessMenu() {
 }
 
 /** Shows or hides the work log beside every page. Off by default; remembered in this browser. */
-export function WorkLogToggle({ className }: { className?: string }) {
+export function WorkLogToggle({ className, menu }: { className?: string; menu?: boolean }) {
   const [on, setOn] = useWorkLog();
+  if (menu)
+    return (
+      <button role="menuitemcheckbox" aria-checked={on} onClick={() => setOn(!on)} className="press flex w-full items-center gap-3 rounded-[var(--radius-sm)] px-3 py-2 text-left text-[15px] hover:bg-sunken">
+        <ReceiptIcon size={16} weight={on ? "fill" : "regular"} aria-hidden />
+        <span className="flex-1">Work log beside every page</span>
+        <span className={clsx("relative inline-block h-4 w-7 rounded-full transition-colors", on ? "bg-pen" : "bg-line-strong")} aria-hidden>
+          <span className={clsx("absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform", on ? "translate-x-3" : "translate-x-0")} />
+        </span>
+      </button>
+    );
   return (
     <button
       onClick={() => setOn(!on)}
@@ -187,7 +199,7 @@ function TeamLink({ working, active }: { working: boolean; active: boolean }) {
     <Link
       href="/agents"
       className={clsx(
-        "press inline-flex h-9 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-[14px] font-semibold",
+        "press inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-[var(--radius-sm)] px-3 text-[14px] font-semibold",
         working ? "bg-pen text-white" : active ? "bg-ink text-white" : "text-ink-2 hover:bg-ink/[0.06] hover:text-ink",
       )}
       aria-label={working ? "Counterpart is working. See the AI team" : "See the AI team"}
@@ -218,8 +230,8 @@ export function Shell({ children, campaignId, log = true }: { children: ReactNod
       href={n.href}
       aria-current={active(n.href) ? "page" : undefined}
       className={clsx(
-        "relative flex h-16 items-center px-3 text-[15px] font-semibold transition-colors",
-        active(n.href) ? "text-ink after:absolute after:inset-x-3 after:-bottom-px after:h-[3px] after:bg-ink" : "text-muted hover:text-ink",
+        "relative flex h-16 items-center whitespace-nowrap px-2 text-[15px] font-semibold transition-colors xl:px-3",
+        active(n.href) ? "text-ink after:absolute after:inset-x-2 after:-bottom-px xl:after:inset-x-3 after:h-[3px] after:bg-ink" : "text-muted hover:text-ink",
       )}
     >
       {n.label}
@@ -238,23 +250,24 @@ export function Shell({ children, campaignId, log = true }: { children: ReactNod
           </Link>
           <span className="mx-1 hidden h-7 w-px bg-line-strong sm:block" aria-hidden />
           <BusinessMenu />
-          <nav className="ml-4 hidden items-center lg:flex" aria-label="Main">
+          <nav className="ml-1 hidden shrink-0 items-center lg:flex xl:ml-4" aria-label="Main">
             {WORK.map(tab)}
             <span className="mx-2 h-5 w-px bg-line-strong" aria-hidden />
             {BUSINESS.map(tab)}
           </nav>
           <span className="flex-1" />
           {business.is_demo && <span className="stamp hidden text-turmeric xl:inline-flex">Demo data</span>}
-          <WorkLogToggle />
+          <KeyStatus />
           <TeamLink working={working} active={active("/agents")} />
           <Link
             href="/counter"
+            aria-label="Counter"
             className={clsx(
-              "press hidden h-9 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-[14px] font-semibold sm:inline-flex",
+              "press hidden h-9 shrink-0 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-[14px] font-semibold sm:inline-flex",
               active("/counter") ? "bg-ink text-white" : "shadow-[inset_0_0_0_1.5px_var(--color-ink)] hover:bg-sunken",
             )}
           >
-            <QrCode size={16} weight="bold" aria-hidden /> Counter
+            <QrCode size={16} weight="bold" aria-hidden /> <span className="lg:hidden xl:inline">Counter</span>
           </Link>
         </div>
       </header>

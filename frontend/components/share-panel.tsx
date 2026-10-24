@@ -1,9 +1,9 @@
 "use client";
 
-import { ArrowSquareOut, Check, Copy, DeviceMobile, DownloadSimple, InstagramLogo, Storefront, WhatsappLogo } from "@phosphor-icons/react";
+import { ArrowSquareOut, Check, Copy, DeviceMobile, DownloadSimple, InstagramLogo, Storefront, Warning, WhatsappLogo } from "@phosphor-icons/react";
 import clsx from "clsx";
 import { useState } from "react";
-import { api } from "@/lib/api";
+import { api, useResource } from "@/lib/api";
 import type { Asset, ChannelsStatus, ResultRow } from "@/lib/types";
 import { postToInstagram } from "./asset-card";
 import { MoreWays } from "./reach-tools";
@@ -128,8 +128,15 @@ function PostOnInstagram({ asset, channels }: { asset: Asset; channels: Channels
 
 /** Step 3: everything the owner needs to put live posts in front of customers, each with its own tracking link. */
 export function SharePanel({ assets, rows, channels }: { assets: Asset[]; rows: ResultRow[]; channels?: ChannelsStatus | null }) {
+  const { data: me } = useResource<{ features?: { public_links?: boolean } }>("/me");
   return (
     <div>
+      {me?.features?.public_links === false && (
+        <p className="mb-4 flex items-start gap-2 rounded-[var(--radius-sm)] bg-turmeric-soft px-3 py-2.5 text-[14px] text-turmeric">
+          <Warning size={16} className="mt-0.5 shrink-0" aria-hidden />
+          These links and QR codes point to this computer (localhost), so customers can&apos;t open them yet. Once the app is deployed and PUBLIC_BASE_URL is set to its address, every link and QR code here switches over by itself, old campaigns included. Codes typed at the counter work either way.
+        </p>
+      )}
       <ol className="mb-6 grid grid-cols-1 gap-px overflow-hidden rounded-[var(--radius-lg)] bg-ink ring-1 ring-ink md:grid-cols-2 xl:grid-cols-4">
         {[
           ["Instagram", channels?.instagram

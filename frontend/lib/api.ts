@@ -37,6 +37,7 @@ let liveSlug: string | null = null;
 /** Point the live feed at the business the owner has open (called by the business provider). */
 export function setLiveBusiness(slug: string | null) {
   if (slug === liveSlug) return;
+  if (liveSlug) cache.clear(); // another business: nothing cached belongs to it
   liveSlug = slug;
   source?.close();
   source = null;
@@ -71,16 +72,41 @@ export function useLedgerEvents(onEvent: Listener) {
   }, []);
 }
 
+// Last answer per path, kept while the tab is open: a page opened again shows what it showed before at once and
+// refreshes in the background, instead of starting from a skeleton. Reads of the same path that overlap share one
+// request (the header, the page and a card often ask for the same thing).
+const cache = new Map<string, unknown>();
+const inflight = new Map<string, Promise<unknown>>();
+
+function load<T>(path: string): Promise<T> {
+  let p = inflight.get(path) as Promise<T> | undefined;
+  if (!p) {
+    p = api<T>(path).then(
+      (v) => {
+        cache.set(path, v);
+        inflight.delete(path);
+        return v;
+      },
+      (e) => {
+        inflight.delete(path);
+        throw e;
+      },
+    );
+    inflight.set(path, p);
+  }
+  return p;
+}
+
 /** Fetch a resource and refetch it whenever the ledger reports a change (debounced). */
 export function useResource<T>(path: string | null, filter?: (e: LedgerEvent) => boolean) {
-  const [data, setData] = useState<T | null>(null);
+  const [data, setData] = useState<T | null>(() => (path ? ((cache.get(path) as T | undefined) ?? null) : null));
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const reload = useCallback(async () => {
     if (!path) return;
     try {
-      setData(await api<T>(path));
+      setData(await load<T>(path));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -88,13 +114,19 @@ export function useResource<T>(path: string | null, filter?: (e: LedgerEvent) =>
   }, [path]);
 
   useEffect(() => {
+    if (path) setData((cache.get(path) as T | undefined) ?? null);
     reload();
-  }, [reload]);
+  }, [reload, path]);
+
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
 
   useLedgerEvents((e) => {
     if (filter && !filter(e)) return;
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(reload, 250);
+    // An agent at work writes many ledger lines in a burst; refetch once it pauses.
+    timer.current = setTimeout(reload, 500);
   });
 
   return { data, error, reload };

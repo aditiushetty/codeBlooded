@@ -24,15 +24,15 @@ def _group(posts: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
     g: dict[str, dict[str, Any]] = {}
     for p in posts:
         k = p.get(key) or "none"
-        row = g.setdefault(k, {"key": k, "posts": 0, "scans": 0, "claims": 0, "redeems": 0})
+        row = g.setdefault(k, {"key": k, "posts": 0, "scans": 0, "claims": 0, "redeems": 0, "from_link": 0})
         row["posts"] += 1
-        for m in ("scans", "claims", "redeems"):
-            row[m] += p[m]
+        for m in ("scans", "claims", "redeems", "from_link"):
+            row[m] += p.get(m, 0)
     rows = list(g.values())
     # The plausible range of each group's true conversion (90%), so a small sample is not read as a sure thing.
-    ranges = posterior([Arm(r["key"], min(r["redeems"], r["scans"]), r["scans"]) for r in rows if r["scans"]])
+    ranges = posterior([Arm(r["key"], min(r["from_link"], r["scans"]), r["scans"]) for r in rows if r["scans"]])
     for row in rows:
-        row["conversion"] = _rate(row["redeems"], row["scans"])
+        row["conversion"] = _rate(row["from_link"], row["scans"])
         rg = ranges.get(row["key"])
         row["likely"] = [round(rg["ci90_low"], 4), round(rg["ci90_high"], 4)] if rg else None
     return sorted(rows, key=lambda r: (-r["redeems"], -r["scans"]))
@@ -62,16 +62,18 @@ def summarize(
     labels: dict[str, dict[str, str]] | None = None,
     festivals: list[dict[str, Any]] | None = None,
     experiments: list[dict[str, Any]] | None = None,
+    comments: list[datetime] | None = None,
 ) -> dict[str, Any]:
     """posts: live posts {asset_id, code, channel, language, segment, variant, headline}.
-    events: {asset_id, type, qty, at (local datetime), source}."""
+    events: {asset_id, type, qty, at (local datetime), source}. comments: when people commented on the campaign's
+    Instagram posts (local time), counted in the best-time hours."""
     labels = labels or {}
     by_asset: dict[str, dict[str, float]] = defaultdict(
-        lambda: {"scan": 0, "click": 0, "redeem": 0, "return": 0, "sales": 0, "bills": 0})
+        lambda: {"scan": 0, "click": 0, "redeem": 0, "linked": 0, "return": 0, "sales": 0, "bills": 0})
     days = max(1, min((today - since).days + 1, 30))
     start = today - timedelta(days=days - 1)
     daily = {start + timedelta(days=i): {"scans": 0, "claims": 0, "redeems": 0} for i in range(days)}
-    hours = [{"hour": h, "scans": 0, "redeems": 0} for h in range(24)]
+    hours = [{"hour": h, "scans": 0, "claims": 0, "redeems": 0, "comments": 0} for h in range(24)]
     simulated = 0
     name = {"scan": "scans", "click": "claims", "redeem": "redeems"}
     for e in events:
@@ -82,6 +84,8 @@ def summarize(
             t = "return"
         if e.get("asset_id"):
             by_asset[str(e["asset_id"])][t] += q
+            if t == "redeem" and e.get("from_link"):  # came in with a code got from the post's link
+                by_asset[str(e["asset_id"])]["linked"] += q
             if t in ("redeem", "return") and e.get("bill") is not None:  # what the customer paid, typed at the counter
                 by_asset[str(e["asset_id"])]["sales"] += float(e["bill"])
                 by_asset[str(e["asset_id"])]["bills"] += 1
@@ -90,26 +94,32 @@ def summarize(
             continue
         if at.date() in daily:
             daily[at.date()][name[t]] += q
-        if t in ("scan", "redeem"):
-            hours[at.hour][name[t]] += q
+        hours[at.hour][name[t]] += q
         simulated += q if e.get("source") == "simulated" else 0
+
+    for at in comments or []:
+        hours[at.hour]["comments"] += 1
+    for h in hours:
+        h["active"] = h["scans"] + h["claims"] + h["redeems"] + h["comments"]
 
     rows = []
     for p in posts:
         o = by_asset[str(p["asset_id"])]
         rows.append({**p, "scans": int(o["scan"]), "claims": int(o["click"]), "redeems": int(o["redeem"]),
-                     "returns": int(o["return"]), "sales": round(o["sales"], 2), "bills": int(o["bills"]), "conversion": _rate(int(o["redeem"]), int(o["scan"]))})
+                     "returns": int(o["return"]), "sales": round(o["sales"], 2), "bills": int(o["bills"]),
+                     "from_link": int(o["linked"]), "conversion": _rate(int(o["linked"]), int(o["scan"]))})
     rows.sort(key=lambda r: (-r["redeems"], -(r["conversion"] or 0), -r["scans"]))
     scans = sum(r["scans"] for r in rows)
     claims = sum(r["claims"] for r in rows)
     redeems = sum(r["redeems"] for r in rows)
     returns = sum(r["returns"] for r in rows)
+    linked = sum(r["from_link"] for r in rows)
     sales, bills = round(sum(r["sales"] for r in rows), 2), sum(r["bills"] for r in rows)
     out: dict[str, Any] = {
         "totals": {"posts": len(rows), "scans": scans, "claims": claims, "redeems": redeems,
                    "returns": returns, "return_rate": _rate(returns, redeems), "sales": sales, "bills": bills, "average_bill": round(sales / bills) if bills else None,
                    "claim_rate": _rate(claims, scans), "redeem_rate": _rate(redeems, claims),
-                   "conversion": _rate(redeems, scans)},
+                   "from_link": linked, "conversion": _rate(linked, scans)},
         "daily": [{"date": d.isoformat(), **v} for d, v in daily.items()],
         "hours": hours,
         "by": {k: _group(rows, k) for k in ("channel", "language", "segment")},
@@ -118,6 +128,14 @@ def summarize(
     }
     out["tips"] = tips(out, today=today, labels=labels, festivals=festivals or [], experiments=experiments or [])
     return out
+
+
+def hour_profile(times: list[datetime]) -> list[dict[str, Any]]:
+    """When customers were active, by hour of day (local times), for the best-time chart."""
+    hours = [{"hour": h, "active": 0} for h in range(24)]
+    for t in times:
+        hours[t.hour]["active"] += 1
+    return hours
 
 
 def _hour(h: int) -> str:
@@ -178,10 +196,10 @@ def tips(a: dict[str, Any], *, today: date, labels: dict[str, dict[str, str]], f
                 f"better {noun}.",
                 ask=f"Make more posts for {label(dim, best['key'])} and fewer for {label(dim, worst['key'])}.")
 
-    busy = sorted(a["hours"], key=lambda h: h["scans"], reverse=True)
-    if busy and busy[0]["scans"] >= 5:
+    busy = sorted(a["hours"], key=lambda h: h.get("active", h["scans"]), reverse=True)
+    if busy and busy[0].get("active", busy[0]["scans"]) >= 5:
         h = busy[0]["hour"]
-        add(3, "timing", f"Most people open the links around {_hour(h)}",
+        add(3, "timing", f"Customers are most active around {_hour(h)}",
             f"Share new posts about an hour earlier, around {_hour((h - 1) % 24)}, so they are fresh when people look.")
 
     live = [p for p in a["posts"] if p["scans"] or p["redeems"]]

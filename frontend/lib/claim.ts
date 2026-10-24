@@ -11,6 +11,7 @@ export interface ClaimStatus {
   locality: string;
   offer: string[];
   review: { rating: number; body: string } | null;
+  opted_in: boolean;
   google_review_url: string | null;
   /** The come-back code made when this one was used (campaigns with come-back codes on). */
   come_back: { code: string; status: string; valid_from: string; valid_until: string } | null;

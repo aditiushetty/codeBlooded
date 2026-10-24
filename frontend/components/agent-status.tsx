@@ -15,7 +15,7 @@ function elapsed(ms: number) {
 }
 
 /** What Counterpart is doing on this campaign right now, why it stopped, or its last note. */
-export function AgentStatus({ campaignId }: { campaignId: string }) {
+export function AgentStatus({ campaignId, carryOn = false }: { campaignId: string; carryOn?: boolean }) {
   const business = useBusiness();
   const { data, reload } = useResource<LedgerEvent[]>(
     `/businesses/${business.slug}/ledger?campaign_id=${campaignId}&limit=15`,
@@ -81,9 +81,17 @@ export function AgentStatus({ campaignId }: { campaignId: string }) {
     );
 
   return (
-    <div className="rise-in mb-10 max-w-[80ch] border-l-[3px] border-pen pl-4">
-      <p className="text-[13px] font-semibold text-pen">Counterpart&apos;s last note</p>
-      <p className="mt-0.5 text-[15px] text-ink-2">{marker.summary}</p>
+    <div className="rise-in mb-10 flex max-w-[90ch] flex-wrap items-end gap-4 border-l-[3px] border-pen pl-4">
+      <div className="min-w-0 flex-1 basis-72">
+        <p className="text-[13px] font-semibold text-pen">Counterpart&apos;s last note</p>
+        <p className="mt-0.5 text-[15px] text-ink-2">{marker.summary}</p>
+      </div>
+      {carryOn && (
+        // The run ended with nothing waiting on the owner and nothing ready: let it pick up from here.
+        <Button variant="primary" onClick={retry} disabled={busy} trailing={<ArrowClockwise size={14} weight="bold" />}>
+          {busy ? "Starting…" : "Carry on"}
+        </Button>
+      )}
     </div>
   );
 }

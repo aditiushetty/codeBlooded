@@ -507,7 +507,10 @@ class PlanArgs(BaseModel):
 @tool("set_campaign_plan", "Save the goal, the audience × channel × language plan and the intent contract.",
       PlanArgs, "internal", [needs_campaign])
 async def set_campaign_plan(ctx: ToolContext, a: PlanArgs) -> dict[str, Any]:
-    if problems := brief_rules.problems(a.goal, a.plan, ctx.business["languages"]):
+    async with connection() as conn:
+        connected = frozenset(r["channel"] for r in await fetch_all(
+            conn, "select channel from channel_accounts where business_id = %s", (ctx.business["id"],)))
+    if problems := brief_rules.problems(a.goal, a.plan, ctx.business["languages"], connected):
         return {"error": "The plan cannot be carried out: " + " ".join(problems)}
     async with connection() as conn:
         c = await services.update_campaign_plan(conn, ctx.campaign_id,  # type: ignore[arg-type]
@@ -981,7 +984,7 @@ async def get_results(ctx: ToolContext, _: NoArgs) -> dict[str, Any]:
     return {"totals": r["totals"], "by": r["by"], "repeat": r["repeat"], "experiments": r["experiments"],
             "posts": [{k: p.get(k) for k in ("code", "asset_id", "channel", "language", "segment", "variant", "headline",
                                              "scans", "claims", "redeems", "returns", "conversion")} for p in r["posts"]],
-            "last_7_days": r["daily"][-7:], "busiest_hours": sorted(r["hours"], key=lambda h: -h["scans"])[:3],
+            "last_7_days": r["daily"][-7:], "busiest_hours": sorted(r["hours"], key=lambda h: -h["active"])[:3],
             "tips": [{k: t[k] for k in ("kind", "title", "detail", "ask")} for t in r["tips"]],
             "simulated_events": r["simulated"], "too_early": analyst_rules.too_early(r)}
 

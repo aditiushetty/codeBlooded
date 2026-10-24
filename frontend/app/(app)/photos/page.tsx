@@ -195,7 +195,7 @@ export default function PhotosPage() {
       <section className="mt-14" aria-labelledby="lib-h">
         <SectionHeading
           id="lib-h"
-          title="Used in posts"
+          title="Your photo library"
           sub={data ? `${active.length} photo${active.length === 1 ? "" : "s"}` : undefined}
           aside={
             <Button variant="ghost" size="sm" onClick={() => reload()}>

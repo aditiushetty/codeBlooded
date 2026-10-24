@@ -9,7 +9,7 @@ import pytest
 from app.agent import runtime
 from app.agent.team import ANALYST, BRIEF, LISTENER, ORCHESTRATOR
 from app.channels import google_business
-from app.db import connection, fetch_one
+from app.db import connection, fetch_one, jsonb
 from app.domain import analyst, bills, brief, wa_template
 from tests.fakes import calls, text
 from tests.test_channels import fake_meta, live_post  # noqa: F401  (fixture)
@@ -38,6 +38,10 @@ def test_plan_rules():
     bad = {"cells": [{"segment": "students", "channel": "billboard", "language": "ta"}]}
     out = " ".join(brief.problems({"statement": "more sales"}, bad, ["kn", "en"]))
     assert "billboard" in out and "'ta'" in out and "number" in out
+    # The owner connected Instagram so campaigns post there: a plan without an Instagram post is sent back.
+    assert "instagram_post" in " ".join(brief.problems(goal, good, ["kn", "en"], frozenset({"instagram"})))
+    assert brief.problems(goal, {"cells": [*good["cells"], {"segment": "students", "channel": "instagram_post",
+                                                             "language": "en"}]}, ["kn", "en"], frozenset({"instagram"})) == []
 
 
 async def test_brief_agent_saves_a_plan_the_team_can_carry_out(client, scripted):
@@ -53,6 +57,7 @@ async def test_brief_agent_saves_a_plan_the_team_can_carry_out(client, scripted)
     assert reach["languages"] == ["kn", "en", "hi"] and reach["channels"]["poster"]["connected"]
     ok = await runtime.execute(ctx, "set_campaign_plan", {**plan, "plan": {"cells": [
         {"segment": "students", "channel": "whatsapp", "language": "kn"},
+        {"segment": "students", "channel": "instagram_post", "language": "en"},
         {"segment": "students", "channel": "poster", "language": "en"}]}})
     assert ok["ok"], ok
 
@@ -107,9 +112,10 @@ async def _live_campaign_with_results() -> tuple[str, str]:
     async with connection() as conn:
         a = await fetch_one(conn, "select campaign_id from assets where id = %s", (asset_id,))
         rows = [("scan",)] * 30 + [("click",)] * 12 + [("redeem",)] * 6
-        for (t,) in rows:
-            await conn.execute("""insert into outcome_events (campaign_id, asset_id, touchpoint_code, type, source)
-                                  values (%s, %s, %s, %s, 'live')""", (a["campaign_id"], asset_id, code, t))
+        for (t,) in rows:  # the redemptions are codes got from the link
+            await conn.execute("""insert into outcome_events (campaign_id, asset_id, touchpoint_code, type, source, meta)
+                                  values (%s, %s, %s, %s, 'live', %s)""",
+                               (a["campaign_id"], asset_id, code, t, jsonb({"from_link": True} if t == "redeem" else {})))
     return str(a["campaign_id"]), asset_id
 
 

@@ -8,7 +8,7 @@ import qrcode
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from app import reviews, services
+from app import contacts, reviews, services
 from app.api.deps import get_router
 from app.channels import whatsapp
 from app.config import get_settings
@@ -91,7 +91,7 @@ async def claim_status(code: str) -> dict[str, Any]:
     """A personal code's page (linked from the WhatsApp reply): the offer, the QR for staff, used or not."""
     async with connection() as conn:
         row = await fetch_one(
-            conn, """select cl.code, cl.status, cl.redeemed_at, cl.campaign_id, cl.kind, cl.valid_until, a.language,
+            conn, """select cl.code, cl.status, cl.redeemed_at, cl.campaign_id, cl.kind, cl.customer_id, cl.valid_until, a.language,
                             b.name, b.locality,
                             b.profile->>'google_review_url' as google_review_url
                      from claims cl join campaigns c on c.id = cl.campaign_id join businesses b on b.id = c.business_id
@@ -105,10 +105,21 @@ async def claim_status(code: str) -> dict[str, Any]:
                                          where parent_code = %s""", (row["code"],))
     lang = row["language"] or "en"
     return {"code": row["code"], "status": row["status"], "redeemed_at": row["redeemed_at"], "language": lang,
-            "name": row["name"], "locality": row["locality"], "review": review,
+            "name": row["name"], "locality": row["locality"], "review": review, "opted_in": row["customer_id"] is not None,
             "google_review_url": row["google_review_url"], "come_back": again, "is_come_back": row["kind"] == "return",
             "valid_until": row["valid_until"],
             "offer": [f.display.get(lang) or f.display.get("en") for f in sheet.facts] if sheet else []}
+
+
+class OptIn(BaseModel):
+    phone: str = Field(min_length=6, max_length=25)
+    name: str | None = Field(None, max_length=80)
+    agree: Literal[True]  # the customer ticked "send me offers on WhatsApp"
+
+
+@public.post("/claims/{code}/opt-in")
+async def claim_opt_in(code: str, body: OptIn) -> dict[str, Any]:
+    return await contacts.opt_in(code, body.phone, body.name)
 
 
 class ReviewBody(BaseModel):

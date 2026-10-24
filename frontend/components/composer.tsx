@@ -49,6 +49,7 @@ export function Composer({
   suggestions = [],
   rows = 3,
   className,
+  compact = false,
 }: {
   placeholder: string;
   submitLabel: string;
@@ -57,6 +58,8 @@ export function Composer({
   suggestions?: string[];
   rows?: number;
   className?: string;
+  /** A narrow column (the campaign sidebar): no "Voice by Sarvam" line beside the buttons. */
+  compact?: boolean;
 }) {
   const [text, setText] = useState("");
   const [lang, setLang] = useState("en-IN");
@@ -222,7 +225,7 @@ export function Composer({
             </>
           )}
           <span className="min-w-0 flex-1 text-[13px] text-muted">
-            {note ?? (!supported ? "Type here. Voice needs Chrome, Edge or Safari." : sarvam && !listening && !transcribing ? "Voice by Sarvam: ಕನ್ನಡ, हिन्दी, English" : "")}
+            {note ?? (!supported ? "Type here. Voice needs Chrome, Edge or Safari." : sarvam && !listening && !transcribing && !compact ? "Voice by Sarvam: ಕನ್ನಡ, हिन्दी, English" : "")}
           </span>
           <Button variant="primary" onClick={submit} disabled={busy || !text.trim()} trailing={<ArrowRight size={15} weight="bold" />}>
             {busy ? "Sending…" : submitLabel}

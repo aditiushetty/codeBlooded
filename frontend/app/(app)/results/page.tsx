@@ -1,20 +1,22 @@
 "use client";
 
-import { ArrowRight, Check, Copy, CursorClick, DeviceMobile, DownloadSimple, InstagramLogo, Link as LinkIcon, QrCode, Storefront, Trophy, WhatsappLogo } from "@phosphor-icons/react";
+import { ArrowRight, CaretDown, Check, Copy, CursorClick, DeviceMobile, DownloadSimple, InstagramLogo, Link as LinkIcon, QrCode, Storefront, Trophy, WhatsappLogo } from "@phosphor-icons/react";
 import clsx from "clsx";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BillImport } from "@/components/bill-import";
+import { Hours } from "@/components/campaign-analytics";
 import { CostLine } from "@/components/effort-cost";
-import { CountUp, Reveal } from "@/components/motion";
+import { InstagramOverview } from "@/components/instagram-overview";
+import { CountUp } from "@/components/motion";
 import { Shell } from "@/components/shell";
-import { CHANNEL_LABEL, Empty, LANG_LABEL, PageHeader, SectionHeading, segmentLabel, Skeleton, stagger } from "@/components/ui";
+import { CHANNEL_LABEL, Empty, LANG_LABEL, PageHeader, segmentLabel, Skeleton, stagger } from "@/components/ui";
 import { useResource } from "@/lib/api";
 import { useBusiness } from "@/lib/business";
 import type { ResultRow, Results } from "@/lib/types";
 
 const CHANNEL_ICON = { instagram_post: InstagramLogo, instagram_story: DeviceMobile, poster: Storefront, whatsapp: WhatsappLogo } as const;
-const pct = (x: number | null) => (x === null ? "-" : `${(x * 100).toFixed(x < 0.1 ? 1 : 0)}%`);
+const pct = (x: number | null) => (x === null ? "–" : `${(x * 100).toFixed(x < 0.1 ? 1 : 0)}%`);
 
 const HOW = [
   { icon: LinkIcon, title: "A link for every post", text: "Each post gets its own short link and QR code when you approve it." },
@@ -87,8 +89,24 @@ function PostRow({ r, best, i }: { r: ResultRow; best: boolean; i: number }) {
   );
 }
 
+const TABS = [
+  { id: "posts", label: "By post" },
+  { id: "instagram", label: "Instagram" },
+  { id: "sales", label: "Match your sales" },
+] as const;
+type Tab = (typeof TABS)[number]["id"];
+
 export default function ResultsPage() {
   const business = useBusiness();
+  const [tab, setTab] = useState<Tab>("posts");
+  useEffect(() => {
+    const h = window.location.hash.slice(1);
+    if (TABS.some((x) => x.id === h)) setTab(h as Tab);
+  }, []);
+  const pick = (t: Tab) => {
+    setTab(t);
+    history.replaceState(null, "", `#${t}`);
+  };
   const { data, reload } = useResource<Results>(`/businesses/${business.slug}/results`, (e) => e.type.startsWith("outcome.") || e.type === "assets.published" || e.type === "bills.imported");
   const groups = new Map<string, ResultRow[]>();
   for (const r of data?.posts ?? []) groups.set(r.campaign_id, [...(groups.get(r.campaign_id) ?? []), r]);
@@ -126,76 +144,114 @@ export default function ResultsPage() {
                 <p className="mt-1 text-[14px] text-white/70">{t?.conversion == null ? "conversion shows once people open links" : "of people who opened a link came in and redeemed"}</p>
               </div>
             </div>
-            {t && t.sales > 0 && (
-              <p className="mt-3 text-[15px] text-ink-2">
-                <span className="font-semibold text-ink">₹{t.sales.toLocaleString("en-IN")}</span> in sales came with redeemed codes, from bills typed at the counter or matched from your payment statement.
-              </p>
-            )}
+            <dl className="mt-4 flex flex-wrap gap-x-10 gap-y-3 border-b border-line pb-4">
+              <div>
+                <dt className="text-[12px] text-muted">Sales with codes</dt>
+                <dd className="text-[20px] font-semibold tabular-nums">₹{(t?.sales ?? 0).toLocaleString("en-IN")}</dd>
+              </div>
+              {t && t.came_back > 0 && (
+                <div>
+                  <dt className="text-[12px] text-muted">Came back a second time</dt>
+                  <dd className="text-[20px] font-semibold tabular-nums">{t.came_back}</dd>
+                </div>
+              )}
+              {data.effort && (
+                <div title={`Across ${data.effort.campaigns} campaign${data.effort.campaigns === 1 ? "" : "s"}${data.effort.waiting_minutes >= 1 ? `, ${Math.round(data.effort.waiting_minutes)} minutes of it waiting for your answers` : ""}`}>
+                  <dt className="text-[12px] text-muted">Your effort per campaign</dt>
+                  <dd className="text-[20px] font-semibold tabular-nums">
+                    {data.effort.taps} taps <span className="text-[14px] font-normal text-muted">· {Math.round(data.effort.minutes)} min</span>
+                  </dd>
+                </div>
+              )}
+            </dl>
             {data.ai && (
               <div className="mt-3">
                 <CostLine ai={data.ai} />
               </div>
-            )}
-            {data.effort && (
-              <p className="mt-2 text-[15px] text-ink-2">
-                A campaign takes you a typical <b className="text-ink">{data.effort.taps} taps</b> and {Math.round(data.effort.minutes)} minutes from brief to live posts
-                {data.effort.waiting_minutes >= 1 && <span className="text-muted">, {Math.round(data.effort.waiting_minutes)} of them waiting for your answers</span>} ({data.effort.campaigns} campaign{data.effort.campaigns === 1 ? "" : "s"}).
-              </p>
-            )}
-            {t && t.came_back > 0 && (
-              <p className="mt-2 text-[15px] text-ink-2">
-                <span className="font-semibold text-ink">{t.came_back}</span> customers came back for a second visit with a come-back code.
-              </p>
             )}
             {t && t.redeemed > t.scans && (
               <p className="mt-3 text-[13px] text-muted">Some codes were redeemed from printed posters or forwarded messages without opening the link, so redemptions can be higher than visits.</p>
             )}
           </section>
 
-          <section className="mt-10" aria-label="Match your sales">
-            <BillImport slug={business.slug} onSaved={reload} />
-          </section>
+          <div className="mt-12 flex gap-1 border-b border-ink" role="tablist" aria-label="Results views">
+            {TABS.map((x) => (
+              <button
+                key={x.id}
+                role="tab"
+                aria-selected={tab === x.id}
+                onClick={() => pick(x.id)}
+                className={clsx("press relative -mb-px px-4 py-2.5 text-[15px] font-semibold", tab === x.id ? "border-x border-t border-ink bg-paper text-ink" : "text-muted hover:text-ink")}
+              >
+                {x.label}
+                {x.id === "posts" && (data.posts?.length ?? 0) > 0 && <span className="ml-1.5 text-[13px] font-normal text-muted">{data.posts.length}</span>}
+              </button>
+            ))}
+          </div>
 
-          <Reveal as="section" className="mt-14">
-            <SectionHeading title="How tracking works" />
-            <ol className="grid grid-cols-1 gap-px overflow-hidden rounded-[var(--radius-lg)] bg-ink ring-1 ring-ink md:grid-cols-3">
+          <div className="pt-6" role="tabpanel">
+            {tab === "posts" && (
+              <section aria-label="By post">
+                <p className="mb-4 text-[14px] text-ink-2">Each post&apos;s own link and code. Copy a link to share it anywhere, or download its QR code for print.</p>
+              {groups.size === 0 ? (
+                <Empty icon={<LinkIcon size={17} aria-hidden />}>Nothing is live yet. When you approve a post, its link and QR code appear here and start counting.</Empty>
+              ) : (
+                <div className="space-y-10">
+                  <div className="max-w-[560px]">
+                    <Hours hours={[]} overall={data.hours} />
+                  </div>
+                  {[...groups.entries()].map(([cid, rows]) => {
+                    const best = rows.filter((r) => r.scans >= 5).sort((a, b) => (b.conversion ?? 0) - (a.conversion ?? 0))[0];
+                    return (
+                      <div key={cid}>
+                        <Link href={`/campaigns/${cid}`} className="press mb-3 inline-flex items-center gap-1.5 rounded-full text-[17px] font-semibold tracking-tight hover:text-pen">
+                          {rows[0].campaign} <ArrowRight size={15} aria-hidden />
+                        </Link>
+                        <ul className="border-t border-ink">
+                          {rows.map((r, i) => (
+                            <PostRow key={r.code} r={r} i={i} best={!!best && best.code === r.code && (best.conversion ?? 0) > 0} />
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              </section>
+            )}
+            {tab === "instagram" && (
+              <section aria-label="Instagram">
+                <p className="mb-4 text-[14px] text-ink-2">Followers, reach, likes, saves and shares from Instagram itself, with the comments on each post.</p>
+                <InstagramOverview slug={business.slug} />
+              </section>
+            )}
+            {tab === "sales" && (
+              <section aria-label="Match your sales">
+                <BillImport slug={business.slug} onSaved={reload} />
+              </section>
+            )}
+          </div>
+
+          <details className="group mt-14 border-t border-line pt-4">
+            <summary className="press inline-flex cursor-pointer list-none items-center gap-2 text-[15px] font-semibold text-ink-2 hover:text-ink">
+              <CaretDown size={14} weight="bold" className="transition-transform group-open:rotate-180" aria-hidden /> How are these counted?
+            </summary>
+            <ol className="mt-4 grid grid-cols-1 gap-px overflow-hidden rounded-[var(--radius-lg)] bg-line ring-1 ring-line md:grid-cols-3">
               {HOW.map(({ icon: Icon, title, text }, i) => (
                 <li key={title} className="bg-surface p-5">
                   <span className="flex items-center justify-between">
                     <span className="font-mono text-[12px] font-semibold text-muted">{String(i + 1).padStart(2, "0")}</span>
                     <Icon size={20} weight="bold" className="text-pen" aria-hidden />
                   </span>
-                  <p className="mt-2 text-[19px] font-bold [font-stretch:90%]">{title}</p>
+                  <p className="mt-2 text-[17px] font-bold [font-stretch:90%]">{title}</p>
                   <p className="mt-1 text-[14px] text-ink-2">{text}</p>
                 </li>
               ))}
             </ol>
-          </Reveal>
-
-          <section className="mt-14" aria-labelledby="posts-h">
-            <SectionHeading id="posts-h" title="By post" sub="Copy a link to share it anywhere, or download its QR code for print." />
-            {groups.size === 0 ? (
-              <Empty icon={<LinkIcon size={17} aria-hidden />}>Nothing is live yet. When you approve a post, its link and QR code appear here and start counting.</Empty>
-            ) : (
-              <div className="space-y-10">
-                {[...groups.entries()].map(([cid, rows]) => {
-                  const best = rows.filter((r) => r.scans >= 5).sort((a, b) => (b.conversion ?? 0) - (a.conversion ?? 0))[0];
-                  return (
-                    <div key={cid}>
-                      <Link href={`/campaigns/${cid}`} className="press mb-3 inline-flex items-center gap-1.5 rounded-full text-[17px] font-semibold tracking-tight hover:text-pen">
-                        {rows[0].campaign} <ArrowRight size={15} aria-hidden />
-                      </Link>
-                      <ul className="border-t border-ink">
-                        {rows.map((r, i) => (
-                          <PostRow key={r.code} r={r} i={i} best={!!best && best.code === r.code && (best.conversion ?? 0) > 0} />
-                        ))}
-                      </ul>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
+            <p className="mt-3 text-[13px] text-muted">
+              Conversion counts only people who opened a post&apos;s link and then redeemed the code they got there. Codes typed straight from a caption or poster count as redeemed, not as conversion.
+            </p>
+          </details>
         </>
       )}
     </Shell>

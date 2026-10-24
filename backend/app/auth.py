@@ -6,6 +6,7 @@ Bearer header. Every owner route depends on `current_user`, then calls `require_
 about to read or change. Unknown and forbidden look the same (404), so business ids do not leak.
 """
 
+import asyncio
 import hashlib
 import time
 from typing import Annotated, Any
@@ -30,6 +31,17 @@ class AuthError(Exception):
 
 _cache: dict[str, tuple[float, User]] = {}
 _TTL = 60.0
+# A page loads several resources at once; when the cached answer runs out they all wait for one check with GoTrue
+# (over one kept-alive connection) instead of each opening its own.
+_checking: dict[str, asyncio.Future[User]] = {}
+_client: httpx.AsyncClient | None = None
+
+
+def _http() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(timeout=10)
+    return _client
 
 
 def _base() -> str:
@@ -117,8 +129,25 @@ async def current_user(authorization: str | None = Header(default=None)) -> User
     h = hashlib.sha256(token.encode()).hexdigest()
     if (hit := _cache.get(h)) and hit[0] > time.monotonic():
         return hit[1]
-    async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.get(f"{_base()}/user", headers={**_public_headers(), "Authorization": f"Bearer {token}"})
+    if pending := _checking.get(h):
+        return await asyncio.shield(pending)
+    _checking[h] = asyncio.get_running_loop().create_future()
+    try:
+        user = await _verify(token, h)
+    except Exception as e:
+        f = _checking.pop(h)
+        f.set_exception(e)
+        f.exception()  # retrieved: no warning when nobody else was waiting
+        raise
+    except BaseException:
+        _checking.pop(h).cancel()
+        raise
+    _checking.pop(h).set_result(user)
+    return user
+
+
+async def _verify(token: str, h: str) -> User:
+    r = await _http().get(f"{_base()}/user", headers={**_public_headers(), "Authorization": f"Bearer {token}"})
     if r.status_code != 200:
         raise HTTPException(401, "Your session ended. Please sign in again.")
     body = r.json()
@@ -140,8 +169,9 @@ async def require_member(conn: Conn, user: User, business_id: Any) -> None:
 
 
 async def business_for(conn: Conn, user: User, slug: str) -> dict[str, Any]:
-    from app import services
-
-    b = await services.get_business(conn, slug)
-    await require_member(conn, user, b["id"])
+    """The business, if the user is a member (one round trip; unknown and forbidden are both 404)."""
+    b = await fetch_one(conn, """select b.* from businesses b join memberships m on m.business_id = b.id
+                                 where b.slug = %s and m.user_id = %s""", (slug, user.id))
+    if not b:
+        raise NotFound("not found")
     return b

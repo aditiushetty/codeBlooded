@@ -17,8 +17,27 @@ export function stepOfSummary(c: CampaignSummary): number {
   if (c.is_historical || c.status === "concluded" || c.status === "retired") return 5;
   if ((c.redemptions ?? 0) > 0) return 4;
   if ((c.live ?? 0) > 0) return 3;
-  if (c.assets > 0) return 2;
+  if (c.assets > 0 || c.facts === "locked") return 2;
   return 1;
+}
+
+/** Where a campaign stands from the list's point of view: what to say, and whether the owner is the one to act.
+ *  "Counterpart is writing" only while an agent really is; a run that ended with nothing to show asks the owner
+ *  to let it carry on instead of looking busy forever. */
+export function summaryState(c: CampaignSummary): { step: number; text: string; you: boolean; stalled: boolean } {
+  const step = stepOfSummary(c);
+  const stalled = !c.working && (c.last_run === "agent.failed" || c.last_run === "agent.finished" || c.last_run === "agent.started");
+  if (step === 1) {
+    if (c.facts === "draft") return { step, text: "Check the offer and lock it", you: true, stalled: false };
+    if (c.working) return { step, text: "Counterpart is writing the offer down", you: false, stalled: false };
+    return { step, text: "Counterpart stopped before the offer was ready", you: true, stalled };
+  }
+  if (step === 2) {
+    if ((c.ready ?? 0) > 0) return { step, text: `Approve the posts you like (${c.ready} ready)`, you: true, stalled: false };
+    if (c.working) return { step, text: "Counterpart is writing the posts", you: false, stalled: false };
+    return { step, text: "Counterpart stopped before the posts were ready", you: true, stalled };
+  }
+  return { step, text: nextAction(step), you: false, stalled: false };
 }
 
 export function stepOfDetail(d: CampaignDetail): number {

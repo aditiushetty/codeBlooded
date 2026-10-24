@@ -1,14 +1,16 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import db, usage
+from app import db, usage, watch
 from app.api.channels import channels_api, webhook
 from app.api.owner import api
 from app.api.public import public
+from app.api.reach import reach_api
 from app.api.workspace import accounts
 from app.auth import AuthError
 from app.config import get_settings
@@ -26,7 +28,12 @@ async def lifespan(app: FastAPI):
     storage = get_storage()
     if isinstance(storage, SupabaseStorage):
         await storage.ensure_bucket()
+    watcher = asyncio.create_task(watch.run(app.state.router, s.channel_watch_seconds)) if s.channel_watch_seconds else None
     yield
+    if watcher:
+        watcher.cancel()
+        with suppress(asyncio.CancelledError):
+            await watcher
     await db.close_pool()
 
 
@@ -37,6 +44,7 @@ app.include_router(api)
 app.include_router(accounts)
 app.include_router(public)
 app.include_router(channels_api)
+app.include_router(reach_api)
 app.include_router(webhook)
 if _s.storage_backend == "local":
     _s.storage_dir.mkdir(parents=True, exist_ok=True)

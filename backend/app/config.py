@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     meta_graph_version: str = "v25.0"
     meta_app_secret: SecretStr | None = None  # verifies X-Hub-Signature-256 on every webhook POST
     whatsapp_verify_token: SecretStr | None = None  # the "Verify token" typed into the Meta webhook settings
+    # Instagram webhooks (DMs, comments) are signed with the Instagram app's own secret (App dashboard > Instagram >
+    # API setup with Instagram login > Instagram app secret), not the Meta app secret. The verify token is shared.
+    instagram_app_secret: SecretStr | None = None
 
     # Optional second OpenAI-compatible LLM (independent verifier / live model swap).
     alt_llm_base_url: str | None = None
@@ -125,6 +128,9 @@ class Settings(BaseSettings):
     # Public origin of the frontend, used to build QR code links.
     public_base_url: str = "http://localhost:3000"
     cors_origins: list[str] = ["http://localhost:3000"]
+    # How often the backend reads connected Instagram accounts on its own (new comments, code requests, insights),
+    # so nothing waits for the owner to open a page. 0 turns it off.
+    channel_watch_seconds: int = 180
 
     # What the AI cost, shown next to what a campaign brought in. Tokens are measured per call (model_calls); the
     # price is an estimate because free tiers report none: Gemini Flash-Lite's paid list price when this was

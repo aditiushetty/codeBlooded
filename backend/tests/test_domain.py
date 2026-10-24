@@ -234,9 +234,9 @@ def test_analytics_finds_the_better_channel_and_peak_hour():
              {"asset_id": "b", "code": "B1", "channel": "instagram_post", "language": "en", "segment": "students",
               "variant": None, "headline": "y"}]
     ev = [{"asset_id": "a", "type": "scan", "qty": 1, "at": datetime(2026, 10, 8, 18, 5)} for _ in range(20)]
-    ev += [{"asset_id": "a", "type": "redeem", "qty": 1, "at": datetime(2026, 10, 8, 19)} for _ in range(6)]
+    ev += [{"asset_id": "a", "type": "redeem", "qty": 1, "at": datetime(2026, 10, 8, 19), "from_link": True} for _ in range(6)]
     ev += [{"asset_id": "b", "type": "scan", "qty": 1, "at": datetime(2026, 10, 8, 18)} for _ in range(20)]
-    ev += [{"asset_id": "b", "type": "redeem", "qty": 1, "at": datetime(2026, 10, 8, 20)}]
+    ev += [{"asset_id": "b", "type": "redeem", "qty": 1, "at": datetime(2026, 10, 8, 20), "from_link": True}]
     out = summarize(posts, ev, today=date(2026, 10, 9), since=date(2026, 10, 3),
                     labels={"channel": {"whatsapp": "WhatsApp", "instagram_post": "Instagram posts"}})
     assert out["totals"]["scans"] == 40 and out["totals"]["redeems"] == 7
@@ -244,6 +244,24 @@ def test_analytics_finds_the_better_channel_and_peak_hour():
     assert kinds["best_channel"]["title"].startswith("WhatsApp converts 6.0x as often as")
     assert "6 pm" in kinds["timing"]["title"]
     assert len(out["daily"]) == 7 and out["daily"][-2]["scans"] == 40
+
+
+def test_best_time_counts_every_kind_of_customer_moment():
+    from datetime import date, datetime
+
+    from app.domain.analytics import hour_profile, summarize
+
+    posts = [{"asset_id": "a", "code": "A1", "channel": "instagram_post", "language": "en", "segment": "students",
+              "variant": None, "headline": "x"}]
+    ev = [{"asset_id": "a", "type": "click", "qty": 1, "at": datetime(2026, 10, 8, 13)},
+          {"asset_id": "a", "type": "redeem", "qty": 1, "at": datetime(2026, 10, 8, 19)}]
+    out = summarize(posts, ev, today=date(2026, 10, 9), since=date(2026, 10, 3),
+                    comments=[datetime(2026, 10, 8, 19, 30), datetime(2026, 10, 8, 19, 45)])
+    by = {h["hour"]: h for h in out["hours"]}
+    # No link opens at all, yet the chart has something to show: a claim at 1 pm, a visit and two comments at 7 pm.
+    assert by[13]["active"] == 1 and by[19] == {"hour": 19, "scans": 0, "claims": 0, "redeems": 1, "comments": 2,
+                                                "active": 3}
+    assert [h["active"] for h in hour_profile([datetime(2026, 10, 1, 9), datetime(2026, 10, 2, 9)])][9] == 2
 
 
 def test_reviews_keep_only_text_found_on_the_page():
@@ -307,6 +325,21 @@ def test_weekday_phrases():
     assert weekdays("sunny mornings") is None
 
 
+def test_maps_link_gives_the_pin_and_the_kind_of_business():
+    from app.autofill import _phone, coords_in_maps_url, place_kind
+
+    url = ("https://www.google.com/maps/place/Gigantics+Gym/@12.9116,77.6474,17z/data=!3m1!4b1!4m6!3m5"
+           "!1s0x0:0x0!8m2!3d12.9118!4d77.6479")
+    assert coords_in_maps_url(url) == (12.9118, 77.6479)  # the place's own pin, not the map's centre
+    assert coords_in_maps_url("https://www.google.com/maps/@12.5,77.5,15z") == (12.5, 77.5)
+    assert coords_in_maps_url("https://maps.app.goo.gl/abc") is None
+    assert place_kind(["gym", "point_of_interest"]) == "Gym"
+    assert place_kind(["south_indian_restaurant", "food"]) == "Restaurant"
+    assert place_kind(["point_of_interest"]) is None
+    assert _phone("+91 98450 12345") == "+919845012345"
+    assert _phone("080 2663 1234") is None  # a landline cannot take WhatsApp claims
+
+
 def test_autofill_keeps_only_what_the_page_says():
     from app.autofill import Item, Read, checked, is_maps_link, name_in_maps_url
 
@@ -339,9 +372,9 @@ def test_no_tip_when_the_gap_could_be_luck():
     posts = [{"asset_id": "a", "code": "A1", "channel": "whatsapp", "language": "kn", "segment": "s", "variant": None},
              {"asset_id": "b", "code": "B1", "channel": "instagram_post", "language": "en", "segment": "s", "variant": None}]
     ev = [{"asset_id": "a", "type": "scan", "qty": 1, "at": datetime(2026, 10, 8, 18)} for _ in range(8)]
-    ev += [{"asset_id": "a", "type": "redeem", "qty": 1, "at": datetime(2026, 10, 8, 19)} for _ in range(3)]
+    ev += [{"asset_id": "a", "type": "redeem", "qty": 1, "at": datetime(2026, 10, 8, 19), "from_link": True} for _ in range(3)]
     ev += [{"asset_id": "b", "type": "scan", "qty": 1, "at": datetime(2026, 10, 8, 18)} for _ in range(8)]
-    ev += [{"asset_id": "b", "type": "redeem", "qty": 1, "at": datetime(2026, 10, 8, 20)} for _ in range(2)]
+    ev += [{"asset_id": "b", "type": "redeem", "qty": 1, "at": datetime(2026, 10, 8, 20), "from_link": True} for _ in range(2)]
     out = summarize(posts, ev, today=date(2026, 10, 9), since=date(2026, 10, 8))
     assert "best_channel" not in {t["kind"] for t in out["tips"]}  # 3 of 8 against 2 of 8 proves nothing
     lo, hi = out["by"]["channel"][0]["likely"]
@@ -426,6 +459,33 @@ def test_moments_come_only_from_real_sources():
     assert ipl["source"] == "You added this" and ipl["removable"] and ipl["detail"] == "7:30 pm"
     merged = moments.merge(weather, moments.from_events(rows, thu), list(cal.values()))
     assert [m["starts_on"] for m in merged] == sorted(m["starts_on"] for m in merged)
+
+
+def test_ideas_stay_inside_the_business_trade():
+    from app.domain import moments
+
+    gym = ["Monthly membership"]
+    # Seen live for a gym on a rainy evening.
+    assert moments.off_trade("Promote warm beverages and comfort food for people seeking shelter", gym, "Gym") == ["beverage", "food"]
+    assert moments.off_trade("Hot filter coffee and vada for rainy evenings", gym, "Gym") == ["coffee", "vada"]
+    assert moments.off_trade("Indoor workout week: first month at 10% off for runners kept in by the rain", gym, "Gym") == []
+    cafe = ["coffee", "pastry", "puffs"]
+    assert moments.off_trade("A hot drink and pastry combo for rainy evenings", cafe, "Café") == []  # its trade
+    assert moments.off_trade("Coffee with masala vada", cafe, "Café") == ["vada"]  # not on its menu
+
+
+def test_a_gym_idea_keeps_its_real_offering_and_loses_made_up_ones():
+    from app.moments import Idea, checked
+
+    rain = {"key": "rain-x", "title": "Rain likely this evening"}
+    menu = [{"name": "Monthly membership", "price": 9000}]
+    idea = {"moment_key": "rain-x", "title": "Rainy day indoor workout", "audience": "runners",
+            "why": "Outdoor runs are off tonight.", "brief": "First month of membership at 10% off for runners kept in by the rain"}
+    (kept,) = checked([Idea(**idea, items=["Monthly Membership", "Gym towel"])], [rain], menu, "Gym")
+    assert kept["items"] == ["Monthly membership"]
+    assert checked([Idea(**idea, items=["Gym towel"])], [rain], menu, "Gym") == []  # sells nothing it has
+    assert checked([Idea(**idea | {"brief": "Warm beverages and comfort food for the rain"}, items=["Monthly membership"])],
+                   [rain], menu, "Gym") == []
 
 
 def test_times_and_days_in_a_post_must_fit_the_offer():

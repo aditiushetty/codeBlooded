@@ -3,6 +3,7 @@
 import { MapPin, Storefront } from "@phosphor-icons/react";
 import { use } from "react";
 import { ComeBackCard } from "@/components/come-back";
+import { OptIn } from "@/components/customer-list";
 import { ReviewForm } from "@/components/review-form";
 import { useClaimStatus } from "@/lib/claim";
 
@@ -61,6 +62,11 @@ export default function CodePage({ params }: { params: Promise<{ code: string }>
       {used && (
         <div className="mt-5">
           <ReviewForm code={data.code} language={data.language} existing={data.review} googleUrl={data.google_review_url} />
+        </div>
+      )}
+      {!data.opted_in && (
+        <div className="mt-6 border-t border-line pt-5">
+          <OptIn code={data.code} lang={data.language} />
         </div>
       )}
     </main>
