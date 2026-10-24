@@ -16,8 +16,21 @@ MIN_SCANS = 5  # below this a rate is noise, so no comparison is made
 SURE = 0.9  # a tip says one group beats another only when it is at least this likely, given the data
 
 
-def _rate(n: int, d: int) -> float | None:
-    return round(n / d, 4) if d else None
+def rate(n: int, d: int) -> float | None:
+    """n of d, where n is always a subset of d. Capped at 1 so a missed open (a phone that blocked the page's
+    tracking, say) can never show as over 100%."""
+    return round(min(n / d, 1.0), 4) if d else None
+
+
+# What each count means (the same everywhere: campaign page, Results, Campaigns list, the Analyst):
+#   scans       people who opened a post's link (once per phone)
+#   claims      personal codes customers asked for: on the link page, on WhatsApp or in an Instagram comment/DM
+#   link_claims the claims made on the link page (the only ones that follow an open)
+#   redeems     visits at the counter with any of the post's codes (come-back visits are counted apart)
+#   used_claims visits with a personal code (so a subset of claims)
+#   post_code   visits with the post's own 6-letter code, typed from a caption or poster (no claim, no open)
+#   from_link   visits with a personal code got on the link page (a subset of scans)
+# Rates: claim_rate = link_claims / scans, redeem_rate = used_claims / claims, conversion = from_link / scans.
 
 
 def _group(posts: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
@@ -32,7 +45,7 @@ def _group(posts: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
     # The plausible range of each group's true conversion (90%), so a small sample is not read as a sure thing.
     ranges = posterior([Arm(r["key"], min(r["from_link"], r["scans"]), r["scans"]) for r in rows if r["scans"]])
     for row in rows:
-        row["conversion"] = _rate(row["from_link"], row["scans"])
+        row["conversion"] = rate(row["from_link"], row["scans"])
         rg = ranges.get(row["key"])
         row["likely"] = [round(rg["ci90_low"], 4), round(rg["ci90_high"], 4)] if rg else None
     return sorted(rows, key=lambda r: (-r["redeems"], -r["scans"]))
@@ -69,7 +82,8 @@ def summarize(
     Instagram posts (local time), counted in the best-time hours."""
     labels = labels or {}
     by_asset: dict[str, dict[str, float]] = defaultdict(
-        lambda: {"scan": 0, "click": 0, "redeem": 0, "linked": 0, "return": 0, "sales": 0, "bills": 0})
+        lambda: {"scan": 0, "click": 0, "link_click": 0, "redeem": 0, "used": 0, "linked": 0, "return": 0, "sales": 0,
+                 "bills": 0})
     days = max(1, min((today - since).days + 1, 30))
     start = today - timedelta(days=days - 1)
     daily = {start + timedelta(days=i): {"scans": 0, "claims": 0, "redeems": 0} for i in range(days)}
@@ -83,9 +97,14 @@ def summarize(
         if t == "redeem" and e.get("is_return"):  # a come-back code: a second visit, not a new customer
             t = "return"
         if e.get("asset_id"):
-            by_asset[str(e["asset_id"])][t] += q
+            a = by_asset[str(e["asset_id"])]
+            a[t] += q
+            if t == "click" and e.get("via") in (None, "web"):  # asked on the link page (simulated ones too)
+                a["link_click"] += q
+            if t == "redeem" and (e.get("with_claim") or e.get("from_link")):  # used a personal code
+                a["used"] += q
             if t == "redeem" and e.get("from_link"):  # came in with a code got from the post's link
-                by_asset[str(e["asset_id"])]["linked"] += q
+                a["linked"] += q
             if t in ("redeem", "return") and e.get("bill") is not None:  # what the customer paid, typed at the counter
                 by_asset[str(e["asset_id"])]["sales"] += float(e["bill"])
                 by_asset[str(e["asset_id"])]["bills"] += 1
@@ -105,21 +124,26 @@ def summarize(
     rows = []
     for p in posts:
         o = by_asset[str(p["asset_id"])]
-        rows.append({**p, "scans": int(o["scan"]), "claims": int(o["click"]), "redeems": int(o["redeem"]),
-                     "returns": int(o["return"]), "sales": round(o["sales"], 2), "bills": int(o["bills"]),
-                     "from_link": int(o["linked"]), "conversion": _rate(int(o["linked"]), int(o["scan"]))})
+        rows.append({**p, "scans": int(o["scan"]), "claims": int(o["click"]), "link_claims": int(o["link_click"]),
+                     "redeems": int(o["redeem"]), "used_claims": int(o["used"]),
+                     "post_code": int(o["redeem"] - o["used"]), "returns": int(o["return"]),
+                     "sales": round(o["sales"], 2), "bills": int(o["bills"]),
+                     "from_link": int(o["linked"]), "conversion": rate(int(o["linked"]), int(o["scan"]))})
     rows.sort(key=lambda r: (-r["redeems"], -(r["conversion"] or 0), -r["scans"]))
     scans = sum(r["scans"] for r in rows)
     claims = sum(r["claims"] for r in rows)
     redeems = sum(r["redeems"] for r in rows)
     returns = sum(r["returns"] for r in rows)
     linked = sum(r["from_link"] for r in rows)
+    link_claims = sum(r["link_claims"] for r in rows)
+    used = sum(r["used_claims"] for r in rows)
     sales, bills = round(sum(r["sales"] for r in rows), 2), sum(r["bills"] for r in rows)
     out: dict[str, Any] = {
-        "totals": {"posts": len(rows), "scans": scans, "claims": claims, "redeems": redeems,
-                   "returns": returns, "return_rate": _rate(returns, redeems), "sales": sales, "bills": bills, "average_bill": round(sales / bills) if bills else None,
-                   "claim_rate": _rate(claims, scans), "redeem_rate": _rate(redeems, claims),
-                   "from_link": linked, "conversion": _rate(linked, scans)},
+        "totals": {"posts": len(rows), "scans": scans, "claims": claims, "link_claims": link_claims,
+                   "redeems": redeems, "used_claims": used, "post_code": redeems - used,
+                   "returns": returns, "return_rate": rate(returns, redeems), "sales": sales, "bills": bills, "average_bill": round(sales / bills) if bills else None,
+                   "claim_rate": rate(link_claims, scans), "redeem_rate": rate(used, claims),
+                   "from_link": linked, "conversion": rate(linked, scans)},
         "daily": [{"date": d.isoformat(), **v} for d, v in daily.items()],
         "hours": hours,
         "by": {k: _group(rows, k) for k in ("channel", "language", "segment")},

@@ -35,7 +35,7 @@ const SORTS = [
   { id: "conversion", label: "Best conversion" },
 ] as const;
 
-const pct = (x: number | null) => (x === null ? "–" : `${(x * 100).toFixed(x < 0.1 ? 1 : 0)}%`);
+const pct = (x: number | null) => (x === null ? "–" : x === 0 ? "0%" : `${(Math.min(x, 1) * 100).toFixed(x < 0.1 ? 1 : 0)}%`);
 
 /** The numbers every campaign is judged on, left to right in the order a customer moves:
  *  posts live (reach) → links opened (interest) → codes claimed (intent) → redeemed at the counter (sales). */
@@ -65,7 +65,7 @@ function Totals({ rows }: { rows: Row[] }) {
       <div className="rise-in col-span-2 bg-ink p-5 text-white lg:col-span-1" style={stagger(4)}>
         <p className="font-mono text-[12px] font-semibold uppercase text-white/50">conversion</p>
         <p className="sign tabular mt-1 text-[56px] text-marker">{opened ? pct(fromLink / opened) : "–"}</p>
-        <p className="mt-1 text-[14px] text-white/70">{opened ? "of people who opened a link came in" : "shows once links are opened"}</p>
+        <p className="mt-1 text-[14px] text-white/70">{opened ? `${fromLink} of ${opened} who opened a link came in with its code` : "shows once links are opened"}</p>
       </div>
     </section>
   );
@@ -162,7 +162,7 @@ export default function Campaigns() {
       // at the counter (caption, poster) is a redemption but not a link conversion, so this never goes over 100%.
       const fromLink = posts.reduce((n, p) => n + p.from_link, 0);
       const best = [...posts].sort((a, b) => b.redeemed - a.redeemed || (b.conversion ?? 0) - (a.conversion ?? 0))[0];
-      return { ...c, step: stepOfSummary(c), opened, claimed, redeemed, fromLink, conversion: opened ? fromLink / opened : null, best: best && best.redeemed > 0 ? best : null };
+      return { ...c, step: stepOfSummary(c), opened, claimed, redeemed, fromLink, conversion: opened ? Math.min(fromLink, opened) / opened : null, best: best && best.redeemed > 0 ? best : null };
     });
   }, [data, results]);
 

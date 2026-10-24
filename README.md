@@ -4,7 +4,6 @@
 
 A café owner says what she wants customers to hear. Counterpart writes the offer down as locked facts, plans and writes campaign posts in English, Kannada and Hindi that cannot misstate the offer, gives each post a tracking code, measures what actually brings people in, and comes back with the next move. The models write; the system guarantees, measures and remembers.
 
-- **Live demo:** https://counterpart-three.vercel.app ("Try the demo business": Kaapi Kone, a synthetic Bengaluru café)
 - **Pitch:** [PITCH.md](PITCH.md) · **Slides:** [codeBlooded-Counterpart-Nexathon-2026.pptx](codeBlooded-Counterpart-Nexathon-2026.pptx)
 - **Decisions and status:** [MEMORY.md](MEMORY.md) · **Architecture rules:** [CLAUDE.md](CLAUDE.md)
 

@@ -767,9 +767,14 @@ async def experiment_status(conn: Conn, experiment_id: UUID | str) -> dict[str, 
         raise NotFound("experiment not found")
     arms_rows = await fetch_all(
         conn,
+        # A success must follow a trial (an open): a visit with the post's own code typed from a caption or poster
+        # never opened anything, and counting it would give "2 out of 1" and a wrong winner.
         """select a.id, a.variant, a.channel, a.segment,
                   coalesce(sum(o.qty) filter (where o.type = %s), 0) as trials,
-                  coalesce(sum(o.qty) filter (where o.type = %s), 0) as successes
+                  coalesce(sum(o.qty) filter (where o.type = %s and (o.type <> 'redeem'
+                      or coalesce((o.meta->>'from_link')::boolean, false)
+                      or exists (select 1 from claims cl where cl.code = o.meta->>'claim' and cl.via = 'web'))), 0)
+                    as successes
            from assets a left join outcome_events o on o.asset_id = a.id
            where a.experiment_id = %s group by a.id order by a.variant nulls last""",
         (exp["trial_type"], exp["success_type"], experiment_id),
@@ -785,8 +790,8 @@ async def experiment_status(conn: Conn, experiment_id: UUID | str) -> dict[str, 
            where c.business_id = %s and c.is_historical and a.channel = any(%s) group by a.id""",
         (exp["success_type"], exp["trial_type"], campaign["business_id"], channels),
     )
-    pa, pb = prior_from_history([(int(h["s"]), int(h["t"])) for h in history], strength=10)
-    arms = [Arm(str(r["id"]), int(r["successes"]), int(r["trials"]), pa, pb) for r in arms_rows]
+    pa, pb = prior_from_history([(min(int(h["s"]), int(h["t"])), int(h["t"])) for h in history], strength=10)
+    arms = [Arm(str(r["id"]), min(int(r["successes"]), int(r["trials"])), int(r["trials"]), pa, pb) for r in arms_rows]
     d = decide(arms, min_trials=MIN_TRIALS, loss_threshold=LOSS_THRESHOLD)
     return {
         "experiment": exp,

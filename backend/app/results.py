@@ -63,6 +63,7 @@ async def campaign(conn: Conn, c: dict[str, Any], b: dict[str, Any]) -> dict[str
                               left join asset_revisions r on r.asset_id = a.id and r.n = a.current_revision
                               where t.campaign_id = %s order by a.created_at""", (cid,)),
         _on_own(fetch_all, """select asset_id::text, type, qty, source, occurred_at at time zone 'Asia/Kolkata' as at,
+                        o.meta->>'via' as via, o.meta ? 'claim' as with_claim,
                         (meta->>'bill_amount')::float as bill, coalesce((meta->>'return')::boolean, false) as is_return,
                         (coalesce((o.meta->>'from_link')::boolean, false) or exists (
                               select 1 from claims cl where cl.code = o.meta->>'claim' and cl.via = 'web')) as from_link

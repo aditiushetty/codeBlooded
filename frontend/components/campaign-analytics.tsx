@@ -2,7 +2,7 @@
 
 import { ArrowSquareOut, ArrowsClockwise, ArrowUUpLeft, ChartLineUp, InstagramLogo, Lightbulb, PaperPlaneTilt, Sparkle, WhatsappLogo } from "@phosphor-icons/react";
 import clsx from "clsx";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { api, useResource } from "@/lib/api";
 import { useBusiness } from "@/lib/business";
 import type { Analytics, Asset, FunnelGroup } from "@/lib/types";
@@ -11,15 +11,44 @@ import { CountUp } from "./motion";
 import { Button, CHANNEL_LABEL, LANG_LABEL, segmentLabel, Skeleton, stagger } from "./ui";
 import { MIN_REACH } from "./instagram-overview";
 
-const pct = (x: number | null | undefined, d = 0) => (x == null ? "–" : `${(x * 100).toFixed(x < 0.1 && x > 0 ? 1 : d)}%`);
+const pct = (x: number | null | undefined, d = 0) => (x == null ? "–" : x === 0 ? "0%" : `${(x * 100).toFixed(x < 0.1 ? 1 : d)}%`);
 
-/** Opened → claimed → redeemed, with the share that makes it to each next stage between the boxes. */
+/** Opened → claimed → came in. Every rate shows the two counts it divides, and only divides a stage by the stage
+ *  those people came from: WhatsApp/Instagram claims never opened the link, and visits with the post's own code
+ *  (typed from a caption or poster) never claimed, so they are shown as extras, not folded into a rate. */
 function Funnel({ t }: { t: Analytics["totals"] }) {
+  const elsewhere = t.claims - t.link_claims;
   const stages = [
-    { n: t.posts, label: "Posts live", rate: null as number | null, rateLabel: "" },
-    { n: t.scans, label: "Opened the link", rate: null, rateLabel: "" },
-    { n: t.claims, label: "Claimed a code", rate: t.claim_rate, rateLabel: "claim" },
-    { n: t.redeems, label: "Redeemed in store", rate: t.redeem_rate, rateLabel: "come in" },
+    { n: t.posts, label: "Posts live", rate: null as ReactNode },
+    { n: t.scans, label: "Opened the link", rate: null },
+    {
+      n: t.claims,
+      label: "Claimed a code",
+      rate: (
+        <>
+          {t.scans > 0 && (
+            <>
+              <span className="font-semibold text-ink">{pct(t.claim_rate)}</span> of people who opened ({t.link_claims} of {t.scans})
+            </>
+          )}
+          {elsewhere > 0 && <span className="block">+{elsewhere} asked on WhatsApp or Instagram</span>}
+        </>
+      ),
+    },
+    {
+      n: t.redeems,
+      label: "Came in",
+      rate: (
+        <>
+          {t.claims > 0 && (
+            <>
+              <span className="font-semibold text-ink">{pct(t.redeem_rate)}</span> of codes used ({t.used_claims} of {t.claims})
+            </>
+          )}
+          {t.post_code > 0 && <span className="block">{t.used_claims > 0 ? "+" : ""}{t.post_code} with the post&apos;s own code</span>}
+        </>
+      ),
+    },
   ];
   return (
     <div className="grid grid-cols-2 gap-px overflow-hidden rounded-[var(--radius-lg)] bg-ink ring-1 ring-ink md:grid-cols-5">
@@ -29,17 +58,15 @@ function Funnel({ t }: { t: Analytics["totals"] }) {
           <p className="sign tabular mt-2 text-[44px]">
             <CountUp value={s.n} />
           </p>
-          {s.rate !== null && (
-            <p className="mt-1 text-[13px] text-ink-2">
-              <span className="font-semibold text-ink">{pct(s.rate)}</span> {s.rateLabel === "claim" ? "of visitors claim" : "of claims come in"}
-            </p>
-          )}
+          {s.rate && <p className="mt-1 text-[13px] text-ink-2">{s.rate}</p>}
         </div>
       ))}
       <div className="rise-in col-span-2 bg-ink p-4 text-white md:col-span-1 md:p-5" style={stagger(4)}>
         <p className="text-[14px] font-semibold text-white/70">Conversion</p>
         <p className="sign tabular mt-2 text-[44px] text-marker">{pct(t.conversion, 1)}</p>
-        <p className="mt-1 text-[13px] text-white/70">of people who opened came in</p>
+        <p className="mt-1 text-[13px] text-white/70">
+          {t.scans ? `${t.from_link} of ${t.scans} who opened the link came in with its code` : "Shows once people open the link"}
+        </p>
       </div>
       {t.bills > 0 && (
         <p className="col-span-2 bg-surface px-4 py-3 text-[14px] text-ink-2 md:col-span-5 md:px-5">

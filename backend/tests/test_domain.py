@@ -246,6 +246,35 @@ def test_analytics_finds_the_better_channel_and_peak_hour():
     assert len(out["daily"]) == 7 and out["daily"][-2]["scans"] == 40
 
 
+def test_every_rate_divides_a_part_by_its_own_whole():
+    """10 opened the link; 4 claimed there and 2 more asked on WhatsApp; 3 came in with personal codes (2 got on the
+    link page) and 2 typed the post's own code from a poster. No rate may count people who never reached its stage."""
+    from datetime import date, datetime
+
+    from app.domain.analytics import summarize
+
+    at = datetime(2026, 10, 8, 18)
+    posts = [{"asset_id": "a", "code": "A1", "channel": "poster", "language": "en", "segment": "s", "variant": None,
+              "headline": "x"}]
+    ev = [{"asset_id": "a", "type": "scan", "qty": 1, "at": at} for _ in range(10)]
+    ev += [{"asset_id": "a", "type": "click", "qty": 1, "at": at, "via": "web"} for _ in range(4)]
+    ev += [{"asset_id": "a", "type": "click", "qty": 1, "at": at, "via": "whatsapp"} for _ in range(2)]
+    ev += [{"asset_id": "a", "type": "redeem", "qty": 1, "at": at, "with_claim": True, "from_link": True} for _ in range(2)]
+    ev += [{"asset_id": "a", "type": "redeem", "qty": 1, "at": at, "with_claim": True}]  # the WhatsApp code
+    ev += [{"asset_id": "a", "type": "redeem", "qty": 1, "at": at} for _ in range(2)]  # the post's own code
+    t = summarize(posts, ev, today=date(2026, 10, 9), since=date(2026, 10, 3))["totals"]
+    assert (t["scans"], t["claims"], t["link_claims"], t["redeems"], t["used_claims"], t["post_code"],
+            t["from_link"]) == (10, 6, 4, 5, 3, 2, 2)
+    assert t["claim_rate"] == 0.4  # 4 of the 10 who opened claimed there (not 6 of 10)
+    assert t["redeem_rate"] == 0.5  # 3 of the 6 personal codes were used (not 5 of 6)
+    assert t["conversion"] == 0.2  # 2 of the 10 who opened came in with that code
+
+    # Codes typed from a poster with no opens at all: nothing over 100%, nothing divided by zero.
+    t = summarize(posts, [{"asset_id": "a", "type": "redeem", "qty": 1, "at": at}], today=date(2026, 10, 9),
+                  since=date(2026, 10, 3))["totals"]
+    assert t["redeems"] == 1 and t["post_code"] == 1 and t["conversion"] is None and t["redeem_rate"] is None
+
+
 def test_best_time_counts_every_kind_of_customer_moment():
     from datetime import date, datetime
 

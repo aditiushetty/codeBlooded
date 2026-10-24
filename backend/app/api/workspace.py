@@ -19,7 +19,7 @@ from app.api.deps import get_router, require_owner
 from app.auth import CurrentUser, business_for, require_member
 from app.config import get_settings
 from app.db import connection, fetch_all, fetch_one, jsonb
-from app.domain import economics, effort
+from app.domain import analytics, economics, effort
 from app.domain.facts import AI_CLICHES, machine_voice
 from app.storage import get_storage
 
@@ -658,6 +658,9 @@ async def results(user: CurrentUser, slug: str) -> dict[str, Any]:
                             coalesce(sum(o.qty) filter (where o.type = 'redeem' and not coalesce((o.meta->>'return')::boolean, false)
                                      and (coalesce((o.meta->>'from_link')::boolean, false) or exists (
                               select 1 from claims cl where cl.code = o.meta->>'claim' and cl.via = 'web'))), 0)::int as from_link,
+                            coalesce(sum(o.qty) filter (where o.type = 'redeem' and not coalesce((o.meta->>'return')::boolean, false)
+                                     and not (o.meta ? 'claim') and not coalesce((o.meta->>'from_link')::boolean, false)), 0)::int
+                              as post_code,
                             coalesce(sum((o.meta->>'bill_amount')::numeric) filter (where o.type = 'redeem'), 0)::float
                               as sales,
                             coalesce(sum(o.qty) filter (where o.source = 'simulated'), 0)::int as simulated
@@ -670,10 +673,10 @@ async def results(user: CurrentUser, slug: str) -> dict[str, Any]:
         r["link"] = f"{base}/r/{r['code']}"
         # Conversion = of the people who opened the link, how many came in with the code they got there. A post's code
         # typed at the counter (from a caption or poster) counts as redeemed, never as a link conversion.
-        r["conversion"] = round(r["from_link"] / r["scans"], 4) if r["scans"] else None
-    totals = {k: sum(r[k] for r in rows) for k in ("scans", "claims", "redeemed", "came_back", "from_link", "sales",
-                                                    "simulated")}
-    totals["conversion"] = round(totals["from_link"] / totals["scans"], 4) if totals["scans"] else None
+        r["conversion"] = analytics.rate(r["from_link"], r["scans"])
+    totals = {k: sum(r[k] for r in rows) for k in ("scans", "claims", "redeemed", "came_back", "from_link", "post_code",
+                                                    "sales", "simulated")}
+    totals["conversion"] = analytics.rate(totals["from_link"], totals["scans"])
     async with connection() as conn:
         spent = await usage.spent(conn, business_id=b["id"])
         live = {r["campaign_id"] for r in rows}

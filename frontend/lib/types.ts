@@ -223,7 +223,7 @@ export interface ResultRow {
 }
 export interface Results {
   posts: ResultRow[];
-  totals: { scans: number; claims: number; redeemed: number; came_back: number; from_link: number; sales: number; simulated: number; conversion: number | null };
+  totals: { scans: number; claims: number; redeemed: number; came_back: number; from_link: number; post_code: number; sales: number; simulated: number; conversion: number | null };
   ai?: AiCost;
   effort?: { campaigns: number; taps: number; minutes: number; waiting_minutes: number } | null;
   hours?: { hour: number; active: number }[] | null; // when customers were active, last 60 days
@@ -302,7 +302,7 @@ export interface Tip {
 }
 
 export interface Analytics {
-  totals: { posts: number; scans: number; claims: number; redeems: number; returns: number; return_rate: number | null; sales: number; bills: number; average_bill: number | null; claim_rate: number | null; redeem_rate: number | null; conversion: number | null };
+  totals: { posts: number; scans: number; claims: number; link_claims: number; redeems: number; used_claims: number; post_code: number; from_link: number; returns: number; return_rate: number | null; sales: number; bills: number; average_bill: number | null; claim_rate: number | null; redeem_rate: number | null; conversion: number | null };
   /** Come-back codes: days valid (null = off), issued after a first visit, used, still open. */
   repeat?: { days: number | null; issued: number; came_back: number; waiting: number; rate: number | null };
   daily: { date: string; scans: number; claims: number; redeems: number }[];

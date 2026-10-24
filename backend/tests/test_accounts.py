@@ -106,9 +106,12 @@ def test_margin_check_without_costs_says_so():
 
 async def test_results_report_conversion_per_post(client):
     r = (await client.get("/api/businesses/kaapi-kone/results")).json()
-    assert set(r["totals"]) == {"scans", "claims", "redeemed", "came_back", "from_link", "sales", "simulated", "conversion"}
+    assert set(r["totals"]) == {"scans", "claims", "redeemed", "came_back", "from_link", "post_code", "sales",
+                                "simulated", "conversion"}
     for p in r["posts"]:
         assert p["link"].endswith("/r/" + p["code"])
+        assert p["from_link"] + p["post_code"] <= p["redeemed"]
+        assert p["conversion"] is None or 0 <= p["conversion"] <= 1
 
 
 async def test_posts_use_a_matching_library_photo_and_spread_across_photos(client):

@@ -38,7 +38,9 @@ async def _returned(conn: AsyncConnection) -> None:
     _used[id(conn)] = time.monotonic()
 
 
-async def open_pool(dsn: str, *, min_size: int = 4, max_size: int = 12) -> AsyncConnectionPool:
+# Supabase's session pooler takes at most 15 clients for the whole project, shared by every server and script that
+# connects (the deployed API, a laptop running it too, migrations). Six each leaves room for two servers and tools.
+async def open_pool(dsn: str, *, min_size: int = 2, max_size: int = 6) -> AsyncConnectionPool:
     global _pool
     _pool = AsyncConnectionPool(
         dsn,
@@ -48,6 +50,7 @@ async def open_pool(dsn: str, *, min_size: int = 4, max_size: int = 12) -> Async
         configure=_configure,
         check=_check,  # replace a dead connection instead of failing that request with a 500
         reset=_returned,
+        max_idle=120,  # hand back connections a burst of requests opened, so other clients can connect
         open=False,
     )
     await _pool.open(wait=True)

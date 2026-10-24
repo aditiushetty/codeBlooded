@@ -16,7 +16,7 @@ import { useBusiness } from "@/lib/business";
 import type { ResultRow, Results } from "@/lib/types";
 
 const CHANNEL_ICON = { instagram_post: InstagramLogo, instagram_story: DeviceMobile, poster: Storefront, whatsapp: WhatsappLogo } as const;
-const pct = (x: number | null) => (x === null ? "–" : `${(x * 100).toFixed(x < 0.1 ? 1 : 0)}%`);
+const pct = (x: number | null) => (x === null ? "–" : x === 0 ? "0%" : `${(x * 100).toFixed(x < 0.1 ? 1 : 0)}%`);
 
 const HOW = [
   { icon: LinkIcon, title: "A link for every post", text: "Each post gets its own short link and QR code when you approve it." },
@@ -139,9 +139,12 @@ export default function ResultsPage() {
               ))}
               <div className="rise-in bg-ink p-6 text-white" style={stagger(3)}>
                 <p className="sign tabular text-[72px] text-marker">
-                  {t?.conversion == null ? "–" : <CountUp value={(t.conversion ?? 0) * 100} format={(n) => `${n.toFixed(1)}%`} />}
+                  {t?.conversion == null ? "–" : <CountUp value={(t.conversion ?? 0) * 100} format={(n) => (n === 0 ? "0%" : `${n.toFixed(1)}%`)} />}
                 </p>
-                <p className="mt-1 text-[14px] text-white/70">{t?.conversion == null ? "conversion shows once people open links" : "of people who opened a link came in and redeemed"}</p>
+                <p className="mt-1 text-[14px] text-white/70">
+                  {t?.conversion == null ? "Conversion shows once people open links." : `${t.from_link} of ${t.scans} people who opened a link came in with its code.`}
+                  {(t?.post_code ?? 0) > 0 && ` ${t!.post_code} more came in with a post's own code (from a caption or poster), counted as redeemed.`}
+                </p>
               </div>
             </div>
             <dl className="mt-4 flex flex-wrap gap-x-10 gap-y-3 border-b border-line pb-4">
