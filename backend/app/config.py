@@ -1,9 +1,10 @@
+import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -127,7 +128,18 @@ class Settings(BaseSettings):
     owner_api_token: SecretStr | None = None
     # Public origin of the frontend, used to build QR code links.
     public_base_url: str = "http://localhost:3000"
-    cors_origins: list[str] = ["http://localhost:3000"]
+    # A JSON list, a comma-separated list or one address: dashboards make the JSON form easy to get wrong.
+    cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _origins(cls, v: object) -> object:
+        if isinstance(v, str):
+            v = v.strip()
+            if v.startswith("["):
+                return json.loads(v)
+            return [o.strip().strip("'\"").rstrip("/") for o in v.split(",") if o.strip()]
+        return v
     # How often the backend reads connected Instagram accounts on its own (new comments, code requests, insights),
     # so nothing waits for the owner to open a page. 0 turns it off.
     channel_watch_seconds: int = 180
